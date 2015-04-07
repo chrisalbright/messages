@@ -149,6 +149,22 @@ public class QueueFileTest {
     w.stop();
     System.out.println("Read " + messages + " messages in " + w.elapsed(TimeUnit.MILLISECONDS) + " milliseconds.");
 
-    Lists.newCopyOnWriteArrayList();
   }
+
+  @Test
+  public void testDoesNotExceedMaxFilesize() throws IOException {
+    int messages = 99;
+    int messageSize = 1024;
+    SecureRandom r = new SecureRandom();
+    byte[] b = new byte[messageSize];
+    for (int i = 0; i < messages; i++) {
+      b = new byte[messageSize];
+      r.nextBytes(b);
+      assertTrue(q.push(b));
+    }
+    r.nextBytes(b);
+    assertFalse(q.push(b));
+  }
+
+
 }
