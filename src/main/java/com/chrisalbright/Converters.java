@@ -1,10 +1,12 @@
 package com.chrisalbright;
 
 import com.google.common.base.Charsets;
-import com.google.common.primitives.Longs;import java.lang.Long;import java.lang.Override;import java.lang.String;
+import com.google.common.primitives.Longs;
 
 public final class Converters {
-  private Converters(){}
+  private Converters() {
+  }
+
   public static final QueueFile.Converter<byte[]> BYTE_ARRAY_CONVERTER = new QueueFile.Converter<byte[]>() {
     @Override
     public byte[] toBytes(byte[] val) {
