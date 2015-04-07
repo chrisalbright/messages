@@ -1,17 +1,16 @@
 package com.chrisalbright;
 
 import com.google.common.base.Stopwatch;
-import com.google.common.collect.Lists;
 import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
-import java.nio.charset.Charset;
 import java.security.SecureRandom;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -22,28 +21,31 @@ import static org.junit.Assert.*;
 
 public class QueueFileTest {
 
-  QueueFile<byte[]> q;
-  public static final Charset CHARSET = Charset.forName("UTF-8");
+  File f;
+  QueueFile<String> q;
 
   @Rule
   public TemporaryFolder folder = new TemporaryFolder();
 
   @Before
   public void setup() throws IOException {
-    RandomAccessFile raf = new RandomAccessFile(folder.newFile("queue-file"), "rw");
-    q = new QueueFile<byte[]>(raf, Converters.BYTE_ARRAY_CONVERTER);
+    f = folder.newFile("queue-file");
+    q = openStringQueueFile();
+  }
+
+  private QueueFile<String> openStringQueueFile() throws FileNotFoundException {
+    return new QueueFile<String>(f, Converters.STRING_CONVERTER);
   }
 
   @Test
   public void testAddSingleItemToQueueFile() throws IOException {
     String expected = "hello world";
-    q.push(expected.getBytes(CHARSET));
+    q.push(expected);
 
-    Optional<byte[]> optional = q.fetch();
+    Optional<String> optional = q.fetch();
     assertTrue(optional.isPresent());
-    byte[] data = optional.get();
 
-    String actual = new String(data);
+    String actual = optional.get();
     assertThat(actual, is(expected));
   }
 
@@ -53,17 +55,13 @@ public class QueueFileTest {
     String expected2 = "hello dolly";
     String expected3 = "howdee doodie";
 
-    q.push(expected1.getBytes(CHARSET));
-    q.push(expected2.getBytes(CHARSET));
-    q.push(expected3.getBytes(CHARSET));
+    q.push(expected1);
+    q.push(expected2);
+    q.push(expected3);
 
-    byte[] data1 = q.fetch().get();
-    byte[] data2 = q.fetch().get();
-    byte[] data3 = q.fetch().get();
-
-    String actual1 = new String(data1);
-    String actual2 = new String(data2);
-    String actual3 = new String(data3);
+    String actual1 = q.fetch().get();
+    String actual2 = q.fetch().get();
+    String actual3 = q.fetch().get();
 
     assertThat(actual1, is(expected1));
     assertThat(actual2, is(expected2));
@@ -103,7 +101,7 @@ public class QueueFileTest {
 
   @Test
   public void testAddAnyTypeToQueueFile() throws IOException {
-    QueueFile<Long> q = new QueueFile<Long>(new RandomAccessFile(folder.newFile(), "rw"), Converters.LONG_CONVERTER);
+    QueueFile<Long> q = new QueueFile<Long>(folder.newFile(), Converters.LONG_CONVERTER);
 
     q.push(1l);
     q.push(2l);
@@ -124,7 +122,8 @@ public class QueueFileTest {
     SecureRandom r = new SecureRandom();
     int messages = 100000;
     int messageSize = 1024;
-    q = new QueueFile<byte[]>(new RandomAccessFile(folder.newFile(), "rw"), Converters.BYTE_ARRAY_CONVERTER, 100 * 1024 * 1024);
+    File f = folder.newFile();
+    QueueFile<byte[]> q = new QueueFile<byte[]>(f, Converters.BYTE_ARRAY_CONVERTER, 100 * 1024 * 1024);
     byte[][] data = new byte[messages][messageSize];
     Stopwatch w = Stopwatch.createStarted();
     for (int i = 0; i < messages; i++) {
@@ -149,22 +148,47 @@ public class QueueFileTest {
     w.stop();
     System.out.println("Read " + messages + " messages in " + w.elapsed(TimeUnit.MILLISECONDS) + " milliseconds.");
 
+    System.out.println("File size: " + f.length() / 1024 / 1024);
+
   }
 
   @Test
   public void testDoesNotExceedMaxFilesize() throws IOException {
     int messages = 99;
     int messageSize = 1024;
+
+    File f = folder.newFile();
+    QueueFile<byte[]> q = new QueueFile<byte[]>(f, Converters.BYTE_ARRAY_CONVERTER, 100 * 1024);
+
     SecureRandom r = new SecureRandom();
     byte[] b = new byte[messageSize];
+
     for (int i = 0; i < messages; i++) {
       b = new byte[messageSize];
       r.nextBytes(b);
       assertTrue(q.push(b));
     }
+
     r.nextBytes(b);
     assertFalse(q.push(b));
   }
 
+  @Test
+  public void testSavesReadPosition() throws IOException {
+    q.push("Hello World");
+    q.push("Hello Dolly");
+
+    String first = q.fetch().get();
+
+    q.commit();
+    q.close();
+
+    q = openStringQueueFile();
+
+    String second = q.fetch().get();
+
+    assertThat(second, is("Hello Dolly"));
+
+  }
 
 }

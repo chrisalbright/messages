@@ -1,8 +1,11 @@
 package com.chrisalbright;
 
+import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
+import java.nio.IntBuffer;
 import java.nio.channels.FileChannel;
 import java.util.Optional;
 
@@ -13,20 +16,44 @@ public class QueueFile<T> implements AutoCloseable {
   private final int maxFileSize;
   private final FileChannel channel;
   private int readPosition = 0;
+  private final IntBuffer readPositionBuffer;
 
-  public QueueFile(RandomAccessFile raf, Converter<T> converter) {
+  public QueueFile(File raf, Converter<T> converter) throws FileNotFoundException {
     this(raf, converter, 100 * 1024);
   }
 
-  public QueueFile(RandomAccessFile raf, Converter<T> converter, int maxFileSize) {
-    this.raf = raf;
+  public QueueFile(File raf, Converter<T> converter, int maxFileSize) throws FileNotFoundException {
+    this.raf = new RandomAccessFile(raf, "rw");
     this.converter = converter;
     this.maxFileSize = maxFileSize;
     this.channel = this.raf.getChannel();
+    try {
+      readPositionBuffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, Integer.BYTES).asIntBuffer();
+      readPosition = getReadPosition();
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
   }
 
+  public void commit() {
+    synchronized (readPositionBuffer) {
+      readPositionBuffer.put(readPosition);
+      readPositionBuffer.flip();
+    }
+  }
+
+  private int getReadPosition() {
+    int i = readPositionBuffer.get();
+    if (i < Integer.BYTES) {
+      i = Integer.BYTES;
+    }
+    readPositionBuffer.flip();
+    return i;
+  }
+
+
   @Override
-  public void close() throws Exception {
+  public void close() throws IOException {
     this.channel.close();
     this.raf.close();
   }
@@ -34,7 +61,7 @@ public class QueueFile<T> implements AutoCloseable {
   public Optional<T> fetch() throws IOException {
     long length = 0;
     synchronized (channel) {
-      length = channel.size() - readPosition;
+      length = channel.size() - getReadPosition();
     }
 
     ByteBuffer buffer;
