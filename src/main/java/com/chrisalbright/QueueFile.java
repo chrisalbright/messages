@@ -11,6 +11,7 @@ import java.util.Optional;
 
 public class QueueFile<T> implements AutoCloseable {
 
+  public static final int HEADER_SIZE = Integer.BYTES;
   private final RandomAccessFile raf;
   private final Converter<T> converter;
   private final int maxFileSize;
@@ -44,8 +45,8 @@ public class QueueFile<T> implements AutoCloseable {
 
   private int getReadPosition() {
     int i = readPositionBuffer.get();
-    if (i < Integer.BYTES) {
-      i = Integer.BYTES;
+    if (i < HEADER_SIZE) {
+      i = HEADER_SIZE;
     }
     readPositionBuffer.flip();
     return i;
@@ -61,7 +62,7 @@ public class QueueFile<T> implements AutoCloseable {
   public Optional<T> fetch() throws IOException {
     long length = 0;
     synchronized (channel) {
-      length = channel.size() - getReadPosition();
+      length = channel.size() - readPosition;
     }
 
     ByteBuffer buffer;
