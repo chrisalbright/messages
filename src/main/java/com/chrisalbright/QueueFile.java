@@ -37,10 +37,8 @@ public class QueueFile<T> implements AutoCloseable {
   }
 
   public void commit() {
-    synchronized (readPositionBuffer) {
-      readPositionBuffer.put(readPosition);
-      readPositionBuffer.flip();
-    }
+    readPositionBuffer.put(readPosition);
+    readPositionBuffer.flip();
   }
 
   private int getReadPosition() {
@@ -61,14 +59,10 @@ public class QueueFile<T> implements AutoCloseable {
 
   public Optional<T> fetch() throws IOException {
     long length = 0;
-    synchronized (channel) {
-      length = channel.size() - readPosition;
-    }
+    length = channel.size() - readPosition;
 
     ByteBuffer buffer;
-    synchronized (this) {
-      buffer = channel.map(FileChannel.MapMode.READ_ONLY, readPosition, length);
-    }
+    buffer = channel.map(FileChannel.MapMode.READ_ONLY, readPosition, length);
 
     if (buffer.limit() <= 0) {
       return Optional.empty();
@@ -78,9 +72,7 @@ public class QueueFile<T> implements AutoCloseable {
     byte[] data = new byte[byteLength];
     buffer.get(data);
 
-    synchronized (this) {
-      readPosition += buffer.position();
-    }
+    readPosition += buffer.position();
 
     return Optional.of(converter.fromBytes(data));
   }
@@ -88,14 +80,12 @@ public class QueueFile<T> implements AutoCloseable {
   public boolean push(T val) throws IOException {
     byte[] bytes = converter.toBytes(val);
     ByteBuffer buffer;
-    synchronized (channel) {
-      int dataSize = bytes.length + Integer.BYTES;
-      long channelSize = channel.size();
-      if ((channelSize + dataSize) > maxFileSize) {
-        return false;
-      }
-      buffer = channel.map(FileChannel.MapMode.READ_WRITE, channelSize, dataSize);
+    int dataSize = bytes.length + Integer.BYTES;
+    long channelSize = channel.size();
+    if ((channelSize + dataSize) > maxFileSize) {
+      return false;
     }
+    buffer = channel.map(FileChannel.MapMode.READ_WRITE, channelSize, dataSize);
     buffer.putInt(bytes.length);
     buffer.put(bytes);
     return true;
