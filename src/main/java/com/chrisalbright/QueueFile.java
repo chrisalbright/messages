@@ -9,9 +9,10 @@ import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.channels.FileChannel;
+import java.util.Iterator;
 import java.util.Optional;
 
-public class QueueFile<T> implements AutoCloseable {
+public class QueueFile<T> implements AutoCloseable, Iterable<T> {
 
   public static final int HEADER_SIZE = Integer.BYTES;
   private final RandomAccessFile raf;
@@ -21,6 +22,27 @@ public class QueueFile<T> implements AutoCloseable {
   private final FileChannel channel;
   private int readPosition = 0;
   private final IntBuffer readPositionBuffer;
+
+  @Override
+  public Iterator<T> iterator() {
+    return new Iterator<T>() {
+      Optional<T> next = Optional.empty();
+      @Override
+      public boolean hasNext() {
+        try {
+          next = fetch();
+          return next.isPresent();
+        } catch (IOException e) {
+          throw new RuntimeException(e);
+        }
+      }
+
+      @Override
+      public T next() {
+        return next.orElse(null);
+      }
+    };
+  }
 
   static class Header {
 

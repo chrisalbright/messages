@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.security.SecureRandom;
+import java.util.Iterator;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.CRC32;
@@ -117,11 +118,11 @@ public class QueueFileTest {
     assertThat(actual3, is(3l));
   }
 
-  @Test(timeout = 2000)
+  @Test(timeout = 1000)
   public void testPerformance() throws IOException {
     SecureRandom r = new SecureRandom();
     int messages = 500;
-    int iterations = 50000;
+    int iterations = 10000;
     int messageSize = 1024;
     File f = folder.newFile();
     QueueFile<byte[]> q = new QueueFile<byte[]>(f, Converters.BYTE_ARRAY_CONVERTER, 1000 * 1024 * 1024);
@@ -215,6 +216,28 @@ public class QueueFileTest {
 
     h.markNotReadyForDelete();
     assertThat(h.isReadyForDelete(), is(false));
+  }
+
+  @Test
+  public void testQueueIsIterable() throws IOException {
+    q.push("one");
+    q.push("two");
+    q.push("three");
+    q.push("four");
+    q.push("five");
+
+    Iterator<String> iterator = q.iterator();
+    assertTrue(iterator.hasNext());
+    assertThat(iterator.next(), is("one"));
+    assertTrue(iterator.hasNext());
+    assertThat(iterator.next(), is("two"));
+    assertTrue(iterator.hasNext());
+    assertThat(iterator.next(), is("three"));
+    assertTrue(iterator.hasNext());
+    assertThat(iterator.next(), is("four"));
+    assertTrue(iterator.hasNext());
+    assertThat(iterator.next(), is("five"));
+    assertFalse(iterator.hasNext());
   }
 
 }
