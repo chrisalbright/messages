@@ -15,8 +15,11 @@ import java.nio.ByteBuffer;
 import java.security.SecureRandom;
 import java.util.Iterator;
 import java.util.Optional;
+import java.util.Spliterator;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.zip.CRC32;
+import java.util.zip.Checksum;
 
 import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.*;
@@ -77,8 +80,9 @@ public class QueueFileTest {
 
   @Test
   public void testCRC() {
-    CRC32 crc32a = new CRC32();
+    Optional<CRC32> crc32a = Optional.of(new CRC32());
     CRC32 crc32b = new CRC32();
+    Optional<CRC32> crc32c = Optional.empty();
 
     ByteBuffer buffer1 = ByteBuffer.allocate(16);
     buffer1.putInt(1);
@@ -92,13 +96,21 @@ public class QueueFileTest {
     buffer2.putInt(3);
     buffer2.putInt(4);
 
-    crc32a.update(buffer1);
+    Function<CRC32, Long> mapper = (c) -> {
+      c.update(buffer1);
+      long sum = c.getValue();
+      c.reset();
+      c.getValue();
+      return sum;
+    };
+    Long crc1 = crc32a.map(mapper).orElse(-1L);
     crc32b.update(buffer2);
 
-    Long crc1 = crc32a.getValue();
     Long crc2 = crc32b.getValue();
+    Long crc3 = crc32c.map(mapper).orElse(-1l);
 
     assertEquals(crc1, crc2);
+    assertEquals(Long.valueOf(-1l), crc3);
   }
 
   @Test
@@ -121,7 +133,7 @@ public class QueueFileTest {
   @Test(timeout = 1000)
   public void testPerformance() throws IOException {
     SecureRandom r = new SecureRandom();
-    int messages = 500;
+    int messages = 30;
     int iterations = 10000;
     int messageSize = 1024;
     File f = folder.newFile();
@@ -210,6 +222,9 @@ public class QueueFileTest {
 
     h.setRecordCount(99);
     assertThat(h.getRecordCount(), is(99));
+
+    h.incrementRecordCount();
+    assertThat(h.getRecordCount(), is(100));
 
     h.markReadyForDelete();
     assertThat(h.isReadyForDelete(), is(true));
