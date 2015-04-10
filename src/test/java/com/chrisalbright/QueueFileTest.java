@@ -10,6 +10,7 @@ import org.junit.rules.TemporaryFolder;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.security.SecureRandom;
 import java.util.Optional;
@@ -116,14 +117,14 @@ public class QueueFileTest {
     assertThat(actual3, is(3l));
   }
 
-  @Ignore
-  @Test
+  @Test(timeout = 2000)
   public void testPerformance() throws IOException {
     SecureRandom r = new SecureRandom();
-    int messages = 100000;
+    int messages = 500;
+    int iterations = 50000;
     int messageSize = 1024;
     File f = folder.newFile();
-    QueueFile<byte[]> q = new QueueFile<byte[]>(f, Converters.BYTE_ARRAY_CONVERTER, 100 * 1024 * 1024);
+    QueueFile<byte[]> q = new QueueFile<byte[]>(f, Converters.BYTE_ARRAY_CONVERTER, 1000 * 1024 * 1024);
     byte[][] data = new byte[messages][messageSize];
     Stopwatch w = Stopwatch.createStarted();
     for (int i = 0; i < messages; i++) {
@@ -133,11 +134,11 @@ public class QueueFileTest {
     System.out.println("Generated " + messages + " random messages in " + w.elapsed(TimeUnit.MILLISECONDS) + " milliseconds.");
 
     w = Stopwatch.createStarted();
-    for (int i = 0; i < messages; i++) {
-      q.push(data[i]);
+    for (int i = 0; i < iterations; i++) {
+      q.push(data[i % messages]);
     }
     w.stop();
-    System.out.println("Wrote " + messages + " random messages in " + w.elapsed(TimeUnit.MILLISECONDS) + " milliseconds.");
+    System.out.println("Wrote " + iterations + " messages in " + w.elapsed(TimeUnit.MILLISECONDS) + " milliseconds.");
 
     Optional<byte[]> val = Optional.empty();
     byte[] bytes = new byte[messageSize];
@@ -146,10 +147,7 @@ public class QueueFileTest {
       bytes = val.get();
     }
     w.stop();
-    System.out.println("Read " + messages + " messages in " + w.elapsed(TimeUnit.MILLISECONDS) + " milliseconds.");
-
-    System.out.println("File size: " + f.length() / 1024 / 1024);
-
+    System.out.println("Read " + iterations + " messages in " + w.elapsed(TimeUnit.MILLISECONDS) + " milliseconds.");
   }
 
   @Test
@@ -189,6 +187,34 @@ public class QueueFileTest {
 
     assertThat(second, is("Hello Dolly"));
 
+  }
+
+  @Test
+  public void testQueueFileHeaderDefaults() throws IOException {
+    RandomAccessFile file = new RandomAccessFile(folder.newFile("headerFile"), "rw");
+    QueueFile.Header h = new QueueFile.Header(file.getChannel());
+    assertThat(h.getMagic(), is(QueueFile.Header.MAGIC_VALUE));
+    assertThat(h.getReadPosition(), is(QueueFile.Header.STARTING_READ_POSITION));
+    assertThat(h.getRecordCount(), is(0));
+    assertThat(h.isReadyForDelete(), is(false));
+  }
+
+  @Test
+  public void testQueueFileHeader() throws IOException {
+    RandomAccessFile file = new RandomAccessFile(folder.newFile("headerFile"), "rw");
+    QueueFile.Header h = new QueueFile.Header(file.getChannel());
+
+    h.setReadPosition(75);
+    assertThat(h.getReadPosition(), is(75));
+
+    h.setRecordCount(99);
+    assertThat(h.getRecordCount(), is(99));
+
+    h.markReadyForDelete();
+    assertThat(h.isReadyForDelete(), is(true));
+
+    h.markNotReadyForDelete();
+    assertThat(h.isReadyForDelete(), is(false));
   }
 
 }

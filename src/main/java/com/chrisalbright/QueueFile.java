@@ -1,5 +1,7 @@
 package com.chrisalbright;
 
+import com.google.common.base.Charsets;
+
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -15,9 +17,115 @@ public class QueueFile<T> implements AutoCloseable {
   private final RandomAccessFile raf;
   private final Converter<T> converter;
   private final int maxFileSize;
+
   private final FileChannel channel;
   private int readPosition = 0;
   private final IntBuffer readPositionBuffer;
+
+  static class Header {
+
+    final static String MAGIC_VALUE = "MSG-1";
+    final static int MAGIC_POSITION = 0;
+    final static int MAGIC_LENGTH = Byte.BYTES * MAGIC_VALUE.length();
+    final static int READY_FOR_DELETE_POSITION = MAGIC_POSITION + MAGIC_LENGTH;
+    final static int READY_FOR_DELETE_LENGTH = Byte.BYTES;
+    final static int READ_POSITION_POSITION = READY_FOR_DELETE_POSITION + READY_FOR_DELETE_LENGTH;
+    final static int READ_POSITION_LENGTH = Integer.BYTES;
+    final static int RECORD_COUNT_POSITION = READ_POSITION_POSITION + READ_POSITION_LENGTH;
+    final static int RECORD_COUNT_LENGTH = Integer.BYTES;
+    final static int STARTING_READ_POSITION = RECORD_COUNT_POSITION + RECORD_COUNT_LENGTH;
+
+    private final ByteBuffer magic;
+    private final ByteBuffer readyForDelete;
+    private final IntBuffer readPosition;
+    private final IntBuffer recordCount;
+
+    public Header(FileChannel channel) throws IOException {
+      long fileSize = channel.size();
+      magic = channel.map(FileChannel.MapMode.READ_WRITE, MAGIC_POSITION, MAGIC_LENGTH);
+      readyForDelete = channel.map(FileChannel.MapMode.READ_WRITE, READY_FOR_DELETE_POSITION, READY_FOR_DELETE_LENGTH);
+      readPosition = channel.map(FileChannel.MapMode.READ_WRITE, READ_POSITION_POSITION, READ_POSITION_LENGTH).asIntBuffer();
+      recordCount = channel.map(FileChannel.MapMode.READ_WRITE, RECORD_COUNT_POSITION, RECORD_COUNT_LENGTH).asIntBuffer();
+      if (fileSize == 0) {
+        initializeHeader();
+      } else if(getMagic() != MAGIC_VALUE) {
+        throw new IllegalStateException("File Header does not contain magic value");
+      }
+    }
+
+    private void initializeHeader() {
+      writeMagic();
+      setReadPosition(STARTING_READ_POSITION);
+      setRecordCount(0);
+      markNotReadyForDelete();
+
+    }
+
+    private void writeMagic() {
+      synchronized (magic) {
+        magic.put(MAGIC_VALUE.getBytes(Charsets.UTF_8));
+        magic.flip();
+      }
+    }
+    public String getMagic() {
+      byte[] buf = new byte[MAGIC_LENGTH];
+      synchronized (magic) {
+        magic.get(buf);
+        magic.flip();
+      }
+      return new String(buf);
+    }
+
+    public void setReadPosition(int position) {
+      synchronized (readPosition) {
+        readPosition.put(position);
+        readPosition.flip();
+      }
+    }
+    public Integer getReadPosition() {
+      synchronized (readPosition) {
+        int position = readPosition.get();
+        readPosition.flip();
+        return position;
+      }
+    }
+
+    public void setRecordCount(int position) {
+      synchronized (recordCount) {
+        recordCount.put(position);
+        recordCount.flip();
+      }
+    }
+    public Integer getRecordCount() {
+      synchronized (recordCount) {
+        int count = recordCount.get();
+        recordCount.flip();
+        return count;
+      }
+    }
+
+    public void markReadyForDelete() {
+      synchronized (readyForDelete) {
+        byte b = 1;
+        readyForDelete.put(b);
+        readyForDelete.flip();
+      }
+    }
+    public void markNotReadyForDelete() {
+      synchronized (readyForDelete) {
+        byte b = 0;
+        readyForDelete.put(b);
+        readyForDelete.flip();
+      }
+    }
+    public Boolean isReadyForDelete() {
+      synchronized (readyForDelete) {
+        byte b = readyForDelete.get();
+        readyForDelete.flip();
+        return b == 1;
+      }
+    }
+  }
 
   public QueueFile(File raf, Converter<T> converter) throws FileNotFoundException {
     this(raf, converter, 100 * 1024);
