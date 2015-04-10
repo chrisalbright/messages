@@ -36,7 +36,7 @@ public class QueueFileTest {
   }
 
   private QueueFile<String> openStringQueueFile() throws FileNotFoundException {
-    return new QueueFile<String>(f, Converters.STRING_CONVERTER);
+    return new QueueFile<>(f, Converters.STRING_ENCODER, Converters.STRING_DECODER);
   }
 
   @Test
@@ -103,7 +103,7 @@ public class QueueFileTest {
 
   @Test
   public void testAddAnyTypeToQueueFile() throws IOException {
-    QueueFile<Long> q = new QueueFile<Long>(folder.newFile(), Converters.LONG_CONVERTER);
+    QueueFile<Long> q = new QueueFile<>(folder.newFile(), Converters.LONG_ENCODER, Converters.LONG_DECODER);
 
     q.push(1l);
     q.push(2l);
@@ -125,7 +125,7 @@ public class QueueFileTest {
     int iterations = 10000;
     int messageSize = 1024;
     File f = folder.newFile();
-    QueueFile<byte[]> q = new QueueFile<byte[]>(f, Converters.BYTE_ARRAY_CONVERTER, 1000 * 1024 * 1024);
+    QueueFile<byte[]> q = new QueueFile<>(f, Converters.BYTE_ARRAY_ENCODER, Converters.BYTE_ARRAY_DECODER, 1000 * 1024 * 1024);
     byte[][] data = new byte[messages][messageSize];
     Stopwatch w = Stopwatch.createStarted();
     for (int i = 0; i < messages; i++) {
@@ -157,7 +157,7 @@ public class QueueFileTest {
     int messageSize = 1024;
 
     File f = folder.newFile();
-    QueueFile<byte[]> q = new QueueFile<byte[]>(f, Converters.BYTE_ARRAY_CONVERTER, 100 * 1024);
+    QueueFile<byte[]> q = new QueueFile<>(f, Converters.BYTE_ARRAY_ENCODER, Converters.BYTE_ARRAY_DECODER, 100 * 1024);
 
     SecureRandom r = new SecureRandom();
     byte[] b = new byte[messageSize];

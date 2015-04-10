@@ -11,15 +11,17 @@ import java.nio.IntBuffer;
 import java.nio.channels.FileChannel;
 import java.util.Iterator;
 import java.util.Optional;
+import java.util.function.Function;
 
 public class QueueFile<T> implements AutoCloseable, Iterable<T> {
 
   public static final int HEADER_SIZE = Integer.BYTES;
   private final RandomAccessFile raf;
-  private final Converter<T> converter;
   private final int maxFileSize;
 
   private final FileChannel channel;
+  private final Function<T, byte[]> encoderFn;
+  private final Function<byte[], T> decoderFn;
   private int readPosition = 0;
   private final IntBuffer readPositionBuffer;
 
@@ -27,6 +29,7 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
   public Iterator<T> iterator() {
     return new Iterator<T>() {
       Optional<T> next = Optional.empty();
+
       @Override
       public boolean hasNext() {
         try {
@@ -70,7 +73,7 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
       recordCount = channel.map(FileChannel.MapMode.READ_WRITE, RECORD_COUNT_POSITION, RECORD_COUNT_LENGTH).asIntBuffer();
       if (fileSize == 0) {
         initializeHeader();
-      } else if(getMagic() != MAGIC_VALUE) {
+      } else if (getMagic() != MAGIC_VALUE) {
         throw new IllegalStateException("File Header does not contain magic value");
       }
     }
@@ -89,6 +92,7 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
         magic.flip();
       }
     }
+
     public String getMagic() {
       byte[] buf = new byte[MAGIC_LENGTH];
       synchronized (magic) {
@@ -104,6 +108,7 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
         readPosition.flip();
       }
     }
+
     public Integer getReadPosition() {
       synchronized (readPosition) {
         int position = readPosition.get();
@@ -118,6 +123,7 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
         recordCount.flip();
       }
     }
+
     public Integer getRecordCount() {
       synchronized (recordCount) {
         int count = recordCount.get();
@@ -133,6 +139,7 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
         readyForDelete.flip();
       }
     }
+
     public void markNotReadyForDelete() {
       synchronized (readyForDelete) {
         byte b = 0;
@@ -140,6 +147,7 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
         readyForDelete.flip();
       }
     }
+
     public Boolean isReadyForDelete() {
       synchronized (readyForDelete) {
         byte b = readyForDelete.get();
@@ -149,13 +157,14 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
     }
   }
 
-  public QueueFile(File raf, Converter<T> converter) throws FileNotFoundException {
-    this(raf, converter, 100 * 1024);
+  public QueueFile(File raf, Function<T, byte[]> encoder, Function<byte[], T> decoder) throws FileNotFoundException {
+    this(raf, encoder, decoder, 100 * 1024);
   }
 
-  public QueueFile(File raf, Converter<T> converter, int maxFileSize) throws FileNotFoundException {
+  public QueueFile(File raf, Function<T, byte[]> encoder, Function<byte[], T> decoder, int maxFileSize) throws FileNotFoundException {
     this.raf = new RandomAccessFile(raf, "rw");
-    this.converter = converter;
+    this.encoderFn = encoder;
+    this.decoderFn = decoder;
     this.maxFileSize = maxFileSize;
     this.channel = this.raf.getChannel();
     try {
@@ -204,11 +213,11 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
 
     readPosition += buffer.position();
 
-    return Optional.of(converter.fromBytes(data));
+    return Optional.of(decoderFn.apply(data));
   }
 
   public boolean push(T val) throws IOException {
-    byte[] bytes = converter.toBytes(val);
+    byte[] bytes = encoderFn.apply(val);
     ByteBuffer buffer;
     int dataSize = bytes.length + Integer.BYTES;
     long channelSize = channel.size();
@@ -221,9 +230,5 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
     return true;
   }
 
-  public static interface Converter<T> {
-    public byte[] toBytes(T val);
-
-    public T fromBytes(byte[] data);
-  }
 }
+
