@@ -38,7 +38,7 @@ public class QueueFileTest {
     q = openStringQueueFile();
   }
 
-  private QueueFile<String> openStringQueueFile() throws FileNotFoundException {
+  private QueueFile<String> openStringQueueFile() throws IOException {
     return new QueueFile<>(f, Converters.STRING_ENCODER, Converters.STRING_DECODER);
   }
 
@@ -130,7 +130,7 @@ public class QueueFileTest {
     assertThat(actual3, is(3l));
   }
 
-  @Test(timeout = 1000)
+  @Test(timeout = 2000)
   public void testPerformance() throws IOException {
     SecureRandom r = new SecureRandom();
     int messages = 30;
@@ -231,6 +231,18 @@ public class QueueFileTest {
 
     h.markNotReadyForDelete();
     assertThat(h.isReadyForDelete(), is(false));
+  }
+
+  @Test
+  public void testAddToQueueIncrementsRecordCount() throws IOException {
+
+    assertThat(q.getRecordCount(), is(0));
+
+    q.push("hello");
+    q.push("world");
+
+    int recordCount = q.getRecordCount();
+    assertThat(q.getRecordCount(), is(2));
   }
 
   @Test(expected = IllegalStateException.class)
