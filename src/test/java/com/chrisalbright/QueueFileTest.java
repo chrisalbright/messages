@@ -218,6 +218,13 @@ public class QueueFileTest {
     assertThat(h.isReadyForDelete(), is(false));
   }
 
+  @Test(expected = IllegalStateException.class)
+  public void testQueueFileHeaderWillNotOverwriteExistingFile() throws IOException {
+    RandomAccessFile file = new RandomAccessFile(folder.newFile("headerFile"), "rw");
+    file.writeBytes("hello world");
+    new QueueFile.Header(file.getChannel());
+  }
+
   @Test
   public void testQueueIsIterable() throws IOException {
     q.push("one");
