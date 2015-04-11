@@ -185,6 +185,26 @@ public class QueueFileTest {
   }
 
   @Test
+  public void testIndicatesWhenFull() throws IOException {
+    int messages = 100;
+    int messageSize = 1024;
+
+    File f = folder.newFile();
+    QueueFile<byte[]> q = new QueueFile<>(f, Converters.BYTE_ARRAY_ENCODER, Converters.BYTE_ARRAY_DECODER, 100 * 1024);
+
+    SecureRandom r = new SecureRandom();
+    byte[] b = new byte[messageSize];
+
+    assertTrue(q.hasCapacity());
+    for (int i = 0; i < messages; i++) {
+      b = new byte[messageSize];
+      r.nextBytes(b);
+      q.push(b);
+    }
+    assertFalse(q.hasCapacity());
+  }
+
+  @Test
   public void testSavesReadPosition() throws IOException {
     q.push("Hello World");
     q.push("Hello Dolly");
@@ -210,6 +230,8 @@ public class QueueFileTest {
     assertThat(h.getReadPosition(), is(QueueFile.Header.STARTING_READ_POSITION));
     assertThat(h.getRecordCount(), is(0));
     assertThat(h.isReadyForDelete(), is(false));
+    assertThat(h.hasCapacity(), is(true));
+
   }
 
   @Test
@@ -231,6 +253,9 @@ public class QueueFileTest {
 
     h.markNotReadyForDelete();
     assertThat(h.isReadyForDelete(), is(false));
+
+    h.setNoCapacity();
+    assertThat(h.hasCapacity(), is(false));
   }
 
   @Test

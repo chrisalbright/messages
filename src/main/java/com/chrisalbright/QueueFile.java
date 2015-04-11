@@ -3,7 +3,6 @@ package com.chrisalbright;
 import com.google.common.base.Charsets;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
@@ -18,7 +17,6 @@ import java.util.function.Function;
 
 public class QueueFile<T> implements AutoCloseable, Iterable<T> {
 
-  public static final int HEADER_SIZE = Integer.BYTES;
   private final RandomAccessFile raf;
   private final int maxFileSize;
 
@@ -87,6 +85,7 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
     int dataSize = bytes.length + Integer.BYTES;
     long channelSize = channel.size();
     if ((channelSize + dataSize) > maxFileSize) {
+      header.setNoCapacity();
       return false;
     }
     buffer = channel.map(FileChannel.MapMode.READ_WRITE, channelSize, dataSize);
@@ -123,6 +122,10 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
     };
   }
 
+  public boolean hasCapacity() {
+    return header.hasCapacity();
+  }
+
   static class Header {
 
     final static String MAGIC_VALUE = "MSG-1";
@@ -130,7 +133,9 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
     final static int MAGIC_SIZE = Byte.BYTES * MAGIC_VALUE.length();
     final static int READY_FOR_DELETE_POSITION = MAGIC_POSITION + MAGIC_SIZE;
     final static int READY_FOR_DELETE_SIZE = Byte.BYTES;
-    final static int READ_POSITION_POSITION = READY_FOR_DELETE_POSITION + READY_FOR_DELETE_SIZE;
+    final static int HAS_CAPACTIY_POSITION = READY_FOR_DELETE_POSITION + READY_FOR_DELETE_SIZE;
+    final static int HAS_CAPACTIY_SIZE = Byte.BYTES;
+    final static int READ_POSITION_POSITION = HAS_CAPACTIY_POSITION +HAS_CAPACTIY_SIZE;
     final static int READ_POSITION_SIZE = Integer.BYTES;
     final static int RECORD_COUNT_POSITION = READ_POSITION_POSITION + READ_POSITION_SIZE;
     final static int RECORD_COUNT_SIZE = Integer.BYTES;
@@ -138,17 +143,20 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
 
     private final ByteBuffer magic;
     private final ByteBuffer readyForDelete;
+    private final ByteBuffer hasCapacity;
     private final IntBuffer readPosition;
     private final IntBuffer recordCount;
 
     ReadWriteLock readPositionLock = new ReentrantReadWriteLock();
     ReadWriteLock recordCountLock = new ReentrantReadWriteLock();
     ReadWriteLock readyForDeleteLock = new ReentrantReadWriteLock();
+    ReadWriteLock hasCapacityLock = new ReentrantReadWriteLock();
 
     public Header(FileChannel channel) throws IOException {
       long fileSize = channel.size();
       magic = channel.map(FileChannel.MapMode.READ_WRITE, MAGIC_POSITION, MAGIC_SIZE);
       readyForDelete = channel.map(FileChannel.MapMode.READ_WRITE, READY_FOR_DELETE_POSITION, READY_FOR_DELETE_SIZE);
+      hasCapacity = channel.map(FileChannel.MapMode.READ_WRITE, HAS_CAPACTIY_POSITION, HAS_CAPACTIY_SIZE);
       readPosition = channel.map(FileChannel.MapMode.READ_WRITE, READ_POSITION_POSITION, READ_POSITION_SIZE).asIntBuffer();
       recordCount = channel.map(FileChannel.MapMode.READ_WRITE, RECORD_COUNT_POSITION, RECORD_COUNT_SIZE).asIntBuffer();
       if (fileSize == 0) {
@@ -163,6 +171,7 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
       setReadPosition(STARTING_READ_POSITION);
       setRecordCount(0);
       markNotReadyForDelete();
+      setHasCapacity();
     }
 
     private void writeMagic() {
@@ -240,16 +249,29 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
       }
     }
 
-    private void writeReadyForDelete(boolean b) {
-      Lock l = readyForDeleteLock.writeLock();
+    private void writeBoolean(ByteBuffer buffer, Lock l, boolean value) {
       try {
         l.lock();
-        readyForDelete.put((byte)(b ? 1 : 0));
-        readyForDelete.flip();
+        buffer.put((byte)(value ? 1 : 0));
+        buffer.flip();
       } finally {
         l.unlock();
       }
+    }
 
+    private boolean readBoolean(ByteBuffer buffer, Lock l) {
+      try {
+        l.lock();
+        byte b = buffer.get();
+        buffer.flip();
+        return b == 1;
+      } finally {
+        l.unlock();
+      }
+    }
+
+    private void writeReadyForDelete(boolean b) {
+      writeBoolean(readyForDelete, readyForDeleteLock.writeLock(), b);
     }
     public void markReadyForDelete() {
       writeReadyForDelete(true);
@@ -260,17 +282,20 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
     }
 
     public Boolean isReadyForDelete() {
-      Lock l = readyForDeleteLock.readLock();
-      try {
-        l.lock();
-        byte b = readyForDelete.get();
-        readyForDelete.flip();
-        return b == 1;
-      } finally {
-        l.unlock();
-      }
+      return readBoolean(readyForDelete, readyForDeleteLock.readLock());
     }
 
+    void setNoCapacity() {
+      writeBoolean(hasCapacity, hasCapacityLock.writeLock(), false);
+    }
+
+    void setHasCapacity() {
+      writeBoolean(hasCapacity, hasCapacityLock.writeLock(), true);
+    }
+
+    public boolean hasCapacity() {
+      return readBoolean(hasCapacity, hasCapacityLock.readLock());
+    }
   }
 
 }
