@@ -2,25 +2,22 @@ package com.chrisalbright;
 
 import com.google.common.base.Stopwatch;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.security.SecureRandom;
 import java.util.Iterator;
 import java.util.Optional;
-import java.util.Spliterator;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.zip.CRC32;
-import java.util.zip.Checksum;
 
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.*;
 
@@ -43,7 +40,7 @@ public class QueueFileTest {
   }
 
   @Test
-  public void testAddSingleItemToQueueFile() throws IOException {
+  public void testAddSingleItemToQueueFile() throws IOException, InterruptedException {
     String expected = "hello world";
     q.push(expected);
 
@@ -55,7 +52,7 @@ public class QueueFileTest {
   }
 
   @Test
-  public void testAddMultipleItemsToQueueFile() throws IOException {
+  public void testAddMultipleItemsToQueueFile() throws IOException, InterruptedException {
     String expected1 = "hello world";
     String expected2 = "hello dolly";
     String expected3 = "howdee doodie";
@@ -71,11 +68,6 @@ public class QueueFileTest {
     assertThat(actual1, is(expected1));
     assertThat(actual2, is(expected2));
     assertThat(actual3, is(expected3));
-  }
-
-  @Test
-  public void testFetchOnEmptyQueueFileReturnsEmptyOption() throws IOException {
-    assertEquals(q.fetch(), Optional.empty());
   }
 
   @Test
@@ -114,7 +106,7 @@ public class QueueFileTest {
   }
 
   @Test
-  public void testAddAnyTypeToQueueFile() throws IOException {
+  public void testAddAnyTypeToQueueFile() throws IOException, InterruptedException {
     QueueFile<Long> q = new QueueFile<>(folder.newFile(), Converters.LONG_ENCODER, Converters.LONG_DECODER);
 
     q.push(1l);
@@ -131,7 +123,7 @@ public class QueueFileTest {
   }
 
   @Test(timeout = 2000)
-  public void testPerformance() throws IOException {
+  public void testPerformance() throws IOException, InterruptedException {
     SecureRandom r = new SecureRandom();
     int messages = 30;
     int iterations = 10000;
@@ -193,7 +185,7 @@ public class QueueFileTest {
     QueueFile<byte[]> q = new QueueFile<>(f, Converters.BYTE_ARRAY_ENCODER, Converters.BYTE_ARRAY_DECODER, 100 * 1024);
 
     SecureRandom r = new SecureRandom();
-    byte[] b = new byte[messageSize];
+    byte[] b;
 
     assertTrue(q.hasCapacity());
     for (int i = 0; i < messages; i++) {
@@ -205,7 +197,7 @@ public class QueueFileTest {
   }
 
   @Test
-  public void testSavesReadPosition() throws IOException {
+  public void testSavesReadPosition() throws IOException, InterruptedException {
     q.push("Hello World");
     q.push("Hello Dolly");
 
@@ -268,6 +260,27 @@ public class QueueFileTest {
 
     int recordCount = q.getRecordCount();
     assertThat(q.getRecordCount(), is(2));
+  }
+
+  @Test
+  public void testBlocksOnEmptyQueue() throws IOException, InterruptedException {
+
+    Stopwatch timer = Stopwatch.createStarted();
+    new Thread(() -> {
+      try {
+        TimeUnit.MILLISECONDS.sleep(300);
+        q.push("Hello world");
+      } catch (InterruptedException e) {
+        throw new RuntimeException(e);
+      } catch (IOException e) {
+        throw new RuntimeException(e);
+      }
+    }).start();
+
+    q.fetch();
+    timer.stop();
+
+    assertThat(timer.elapsed(TimeUnit.MILLISECONDS), greaterThanOrEqualTo(300L));
   }
 
   @Test(expected = IllegalStateException.class)
