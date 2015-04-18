@@ -29,12 +29,12 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
 
   private final Header header;
 
-  public QueueFile(File raf, Function<T, byte[]> encoder, Function<byte[], T> decoder) throws IOException {
-    this(raf, encoder, decoder, 100 * 1024);
+  public QueueFile(File file, Function<T, byte[]> encoder, Function<byte[], T> decoder) throws IOException {
+    this(file, encoder, decoder, 100 * 1024);
   }
 
-  public QueueFile(File raf, Function<T, byte[]> encoder, Function<byte[], T> decoder, int maxFileSize) throws IOException {
-    this.raf = new RandomAccessFile(raf, "rw");
+  public QueueFile(File file, Function<T, byte[]> encoder, Function<byte[], T> decoder, int maxFileSize) throws IOException {
+    this.raf = new RandomAccessFile(file, "rw");
     this.encoderFn = encoder;
     this.decoderFn = decoder;
     this.maxFileSize = maxFileSize;
@@ -61,12 +61,10 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
     this.raf.close();
   }
 
-  public Optional<T> fetch() throws IOException, InterruptedException {
+  public Optional<T> peek() throws IOException, InterruptedException {
     try {
       fetchLock.lock();
-
-      long length = 0;
-      length = channel.size() - readPosition;
+      long length = channel.size() - readPosition;
 
       while (header.getRecordCount() == 0) {
         fetchCondition.await();
@@ -74,6 +72,32 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
 
       ByteBuffer buffer;
       buffer = channel.map(FileChannel.MapMode.READ_ONLY, readPosition, length);
+
+      if (buffer.limit() <= 0) {
+        return Optional.empty();
+      }
+
+      int byteLength = buffer.getInt();
+      byte[] data = new byte[byteLength];
+      buffer.get(data);
+
+      return Optional.of(decoderFn.apply(data));
+    } finally {
+      fetchLock.unlock();
+    }
+  }
+
+  public Optional<T> fetch() throws IOException, InterruptedException {
+    try {
+      fetchLock.lock();
+
+      long length = channel.size() - readPosition;
+
+      while (header.getRecordCount() == 0) {
+        fetchCondition.await();
+      }
+
+      ByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, readPosition, length);
 
       if (buffer.limit() <= 0) {
         return Optional.empty();
@@ -96,14 +120,13 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
     try {
       pushLock.lock();
       byte[] bytes = encoderFn.apply(val);
-      ByteBuffer buffer;
       int dataSize = bytes.length + Integer.BYTES;
       long channelSize = channel.size();
       if ((channelSize + dataSize) > maxFileSize) {
         header.setNoCapacity();
         return false;
       }
-      buffer = channel.map(FileChannel.MapMode.READ_WRITE, channelSize, dataSize);
+      ByteBuffer buffer = channel.map(FileChannel.MapMode.READ_WRITE, channelSize, dataSize);
       buffer.putInt(bytes.length);
       buffer.put(bytes);
       int count = header.incrementRecordCount();
