@@ -259,7 +259,20 @@ public class QueueFileTest {
     q.push("world");
 
     int recordCount = q.getRecordCount();
-    assertThat(q.getRecordCount(), is(2));
+    assertThat(recordCount, is(2));
+  }
+
+  @Test
+  public void testPeekPreservesAllElements() throws IOException, InterruptedException {
+    assertThat(q.getRecordCount(), is(0));
+
+    q.push("hello");
+    q.push("world");
+
+    assertThat(q.peek().get(), is("hello"));
+    int recordCount = q.getRecordCount();
+    assertThat(recordCount, is(2));
+
   }
 
   @Test
