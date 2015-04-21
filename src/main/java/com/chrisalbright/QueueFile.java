@@ -10,24 +10,28 @@ import java.nio.IntBuffer;
 import java.nio.channels.FileChannel;
 import java.util.Iterator;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.*;
 import java.util.function.Function;
 
 public class QueueFile<T> implements AutoCloseable, Iterable<T> {
 
   private final RandomAccessFile raf;
+  private final FileChannel channel;
+  private final String fileName;
+
   private final int maxFileSize;
 
-  private final FileChannel channel;
   private final Function<T, byte[]> encoderFn;
   private final Function<byte[], T> decoderFn;
-  private int readPosition = 0;
 
   private Lock pushLock = new ReentrantLock();
   private Lock fetchLock = new ReentrantLock();
   private Condition fetchCondition = fetchLock.newCondition();
 
   private final Header header;
+  private int readPosition = 0;
+  private AtomicInteger consumedRecordCount;
 
   public QueueFile(File file, Function<T, byte[]> encoder, Function<byte[], T> decoder) throws IOException {
     this(file, encoder, decoder, 100 * 1024);
@@ -39,12 +43,15 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
     this.decoderFn = decoder;
     this.maxFileSize = maxFileSize;
     this.channel = this.raf.getChannel();
-    header = new Header(channel);
-    readPosition = header.getReadPosition();
+    this.header = new Header(channel);
+    this.readPosition = header.getReadPosition();
+    this.fileName = file.getName();
+    this.consumedRecordCount = new AtomicInteger(0);
   }
 
-  public void commit() {
+  public synchronized void commit() {
     header.setReadPosition(readPosition);
+    header.setConsumedCount(consumedRecordCount.get());
   }
 
   public int getReadPosition() {
@@ -52,7 +59,7 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
   }
 
   public int getRecordCount() {
-    return header.getRecordCount();
+    return header.getRecordCount() - header.getConsumedCount();
   }
 
   @Override
@@ -109,6 +116,7 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
 
       readPosition += buffer.position();
 
+      consumedRecordCount.incrementAndGet();
       return Optional.of(decoderFn.apply(data));
     } finally {
       fetchLock.unlock();
@@ -121,6 +129,9 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
       pushLock.lock();
       byte[] bytes = encoderFn.apply(val);
       int dataSize = bytes.length + Integer.BYTES;
+      if (dataSize > maxFileSize) {
+        throw new IOException("Attempt to write a message larger than max file size.");
+      }
       long channelSize = channel.size();
       if ((channelSize + dataSize) > maxFileSize) {
         header.setNoCapacity();
@@ -181,9 +192,13 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
     return header.hasCapacity();
   }
 
+  public String getFileName() {
+    return fileName;
+  }
+
   static class Header {
 
-    final static String MAGIC_VALUE = "MSG-1";
+    final static String MAGIC_VALUE = "MSG1";
     final static int MAGIC_POSITION = 0;
     final static int MAGIC_SIZE = Byte.BYTES * MAGIC_VALUE.length();
     final static int READY_FOR_DELETE_POSITION = MAGIC_POSITION + MAGIC_SIZE;
@@ -194,18 +209,23 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
     final static int READ_POSITION_SIZE = Integer.BYTES;
     final static int RECORD_COUNT_POSITION = READ_POSITION_POSITION + READ_POSITION_SIZE;
     final static int RECORD_COUNT_SIZE = Integer.BYTES;
-    final static int STARTING_READ_POSITION = RECORD_COUNT_POSITION + RECORD_COUNT_SIZE;
+    final static int CONSUMED_RECORD_COUNT_POSITION = RECORD_COUNT_POSITION + RECORD_COUNT_SIZE;
+    final static int CONSUMED_RECORD_COUNT_SIZE = Integer.BYTES;
+    final static int STARTING_READ_POSITION = CONSUMED_RECORD_COUNT_POSITION + CONSUMED_RECORD_COUNT_SIZE;
+    final static int LENGTH = STARTING_READ_POSITION - 1;
 
     private final ByteBuffer magic;
     private final ByteBuffer readyForDelete;
     private final ByteBuffer hasCapacity;
     private final IntBuffer readPosition;
     private final IntBuffer recordCount;
+    private final IntBuffer consumedRecordCount;
 
-    ReadWriteLock readPositionLock = new ReentrantReadWriteLock();
-    ReadWriteLock recordCountLock = new ReentrantReadWriteLock();
     ReadWriteLock readyForDeleteLock = new ReentrantReadWriteLock();
     ReadWriteLock hasCapacityLock = new ReentrantReadWriteLock();
+    ReadWriteLock readPositionLock = new ReentrantReadWriteLock();
+    ReadWriteLock recordCountLock = new ReentrantReadWriteLock();
+    ReadWriteLock consumedRecordCountLock = new ReentrantReadWriteLock();
 
     public Header(FileChannel channel) throws IOException {
       long fileSize = channel.size();
@@ -214,6 +234,7 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
       hasCapacity = channel.map(FileChannel.MapMode.READ_WRITE, HAS_CAPACTIY_POSITION, HAS_CAPACTIY_SIZE);
       readPosition = channel.map(FileChannel.MapMode.READ_WRITE, READ_POSITION_POSITION, READ_POSITION_SIZE).asIntBuffer();
       recordCount = channel.map(FileChannel.MapMode.READ_WRITE, RECORD_COUNT_POSITION, RECORD_COUNT_SIZE).asIntBuffer();
+      consumedRecordCount = channel.map(FileChannel.MapMode.READ_WRITE, CONSUMED_RECORD_COUNT_POSITION, CONSUMED_RECORD_COUNT_SIZE).asIntBuffer();
       if (fileSize == 0) {
         initializeHeader();
       } else if (!getMagic().equals(MAGIC_VALUE)) {
@@ -305,6 +326,22 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
       }
     }
 
+    public int getConsumedCount() {
+      return LockUtil.withLock(consumedRecordCountLock.readLock(), () -> {
+        int count = consumedRecordCount.get();
+        consumedRecordCount.flip();
+        return count;
+      });
+    }
+
+    public void setConsumedCount(final int count) {
+      LockUtil.withLock(consumedRecordCountLock.writeLock(), () -> {
+        consumedRecordCount.put(count);
+        consumedRecordCount.flip();
+        return Void.TYPE;
+      });
+    }
+
     private void writeBoolean(ByteBuffer buffer, Lock l, boolean value) {
       try {
         l.lock();
@@ -353,6 +390,7 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
     public boolean hasCapacity() {
       return readBoolean(hasCapacity, hasCapacityLock.readLock());
     }
+
   }
 
 }

@@ -7,31 +7,39 @@ import com.google.common.collect.Iterators;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Queues;
 import com.google.common.io.Files;
+import com.google.common.primitives.UnsignedLong;
+import com.google.common.primitives.UnsignedLongs;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
+import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
 import static com.chrisalbright.LockUtil.withLock;
+import static com.google.common.primitives.UnsignedLong.ONE;
 
 public class QueueEnvironment<T> {
 
-  private final BlockingQueue<QueueFile<T>> queueFiles = Queues.newLinkedBlockingQueue();
-  private final LinkedList<QueueFile<T>> preCommittedFiles = Lists.newLinkedList();
+  private final BlockingDeque<QueueFile<T>> activeFiles = Queues.newLinkedBlockingDeque();
+  private final LinkedList<QueueFile<T>> consumedFiles = Lists.newLinkedList();
   private final Function<T, byte[]> encoderFn;
   private final Function<byte[], T> decoderFn;
 
+  private final ExecutorService deleteExecutor;
   private final ReentrantLock takeLock = new ReentrantLock();
   private final ReentrantLock putLock = new ReentrantLock();
+  private final ReentrantLock queueFileLock = new ReentrantLock();
 
   private final Condition takeCondition = takeLock.newCondition();
   private final Condition putCondition = putLock.newCondition();
+
+  private final File rootPath;
+  private final int maxFileSize;
 
   public QueueEnvironment(File rootPath, Function<T, byte[]> encoderFn, Function<byte[], T> decoderFn) throws InterruptedException {
     this(rootPath, encoderFn, decoderFn, 100 * 1024);
@@ -40,6 +48,9 @@ public class QueueEnvironment<T> {
   public QueueEnvironment(File rootPath, Function<T, byte[]> encoderFn, Function<byte[], T> decoderFn, int maxFileSize) throws InterruptedException {
     this.encoderFn = encoderFn;
     this.decoderFn = decoderFn;
+    this.rootPath = rootPath;
+    this.maxFileSize = maxFileSize;
+    this.deleteExecutor = Executors.newSingleThreadExecutor();
     if (!rootPath.exists()) {
       if (!rootPath.mkdirs()) {
         throw new IllegalStateException("Unable to create directory at " + rootPath.getAbsolutePath());
@@ -54,27 +65,67 @@ public class QueueEnvironment<T> {
             throw Throwables.propagate(e);
           }
         })
-        .forEach(queueFiles::add);
+        .forEach(activeFiles::addLast);
     }
   }
 
   private QueueFile<T> newQueueFile() {
-    return null;
+    return LockUtil.withLock(queueFileLock, () -> {
+      QueueFile<T> lastQueueFile = activeFiles.peekLast();
+      String lastFileNo = Files.getNameWithoutExtension(lastQueueFile.getFileName());
+      String nextFileNo = UnsignedLong.valueOf(lastFileNo).plus(ONE).toString();
+      return newQueueFile(nextFileNo);
+    });
+  }
+
+  private QueueFile<T> newQueueFile(String id) throws IOException {
+    Stream<Integer> zeros = Stream.iterate(0, (n) -> 0);
+    StringBuilder fileName = new StringBuilder("");
+    zeros.limit(20 - id.length()).forEach(fileName::append);
+    fileName.append(id).append(".queuefile");
+    File queueFile = new File(rootPath, fileName.toString());
+    return new QueueFile<>(queueFile, encoderFn, decoderFn, maxFileSize);
   }
 
   public int fileCount() {
-    return queueFiles.size();
+    return activeFiles.size();
   }
 
   public void commit() {
-
+    withLock(queueFileLock, () -> {
+      QueueFile<T> q;
+      while ((q = consumedFiles.poll()) != null) {
+        q.commit();
+        cleanFile(q);
+      }
+      activeFiles.peekLast().commit();
+      return Void.TYPE;
+    });
   }
 
-  public BlockingQueue<T> getQueue() throws InterruptedException {
+  private void cleanFile(final QueueFile<T> q) {
+    deleteExecutor.submit(() -> {
+      new File(rootPath, q.getFileName()).delete();
+    });
+  }
+
+  public void close() throws IOException{
+    withLock(queueFileLock, () -> {
+      for (QueueFile<T> activeFile : activeFiles) {
+        activeFile.close();
+      }
+      for (QueueFile<T> consumedFile : consumedFiles) {
+        consumedFile.close();
+      }
+      return Void.TYPE;
+    });
+  }
+
+  public BlockingQueue<T> getQueue() throws InterruptedException, IOException {
     final QueueEnvironment<T> manager = this;
 
-    if (queueFiles.size() == 0) {
-      queueFiles.put(manager.newQueueFile());
+    if (activeFiles.size() == 0) {
+      activeFiles.put(manager.newQueueFile("1"));
     }
 
     return new BlockingQueue<T>() {
@@ -82,8 +133,8 @@ public class QueueEnvironment<T> {
       public boolean add(T t) {
         Preconditions.checkNotNull(t, "Null elements not accepted");
         try {
-          while (!queueFiles.peek().push(t)) {
-            queueFiles.put(manager.newQueueFile());
+          while (!activeFiles.peekLast().push(t)) {
+            activeFiles.putLast(manager.newQueueFile());
           }
           return true;
         } catch (Exception e) {
@@ -148,8 +199,8 @@ public class QueueEnvironment<T> {
       private Optional<T> dequeue() {
         try {
           Optional<T> t;
-          while (!(t = queueFiles.peek().fetch()).isPresent()) {
-            queueFiles.put(manager.newQueueFile());
+          while (!(t = activeFiles.peekFirst().fetch()).isPresent()) {
+            consumedFiles.addLast(activeFiles.takeFirst());
           }
           return t;
         } catch (Exception e) {
@@ -160,8 +211,8 @@ public class QueueEnvironment<T> {
       private Optional<T> _peek() {
         try {
           Optional<T> t;
-          while (!(t = queueFiles.peek().peek()).isPresent()) {
-            queueFiles.put(manager.newQueueFile());
+          while (!(t = activeFiles.peekFirst().peek()).isPresent()) {
+            activeFiles.putFirst(manager.newQueueFile());
           }
           return t;
         } catch (Exception e) {
@@ -202,7 +253,7 @@ public class QueueEnvironment<T> {
 
       @Override
       public int size() {
-        Optional<Integer> count = StreamSupport.stream(queueFiles.spliterator(), false)
+        Optional<Integer> count = StreamSupport.stream(activeFiles.spliterator(), false)
                                     .map(QueueFile::getRecordCount)
                                     .reduce((l, r) -> l + r);
         return count.orElse(0);
@@ -215,7 +266,7 @@ public class QueueEnvironment<T> {
 
       @Override
       public Iterator<T> iterator() {
-        Iterator<Iterator<T>> queueFileIterators = StreamSupport.stream(queueFiles.spliterator(), false)
+        Iterator<Iterator<T>> queueFileIterators = StreamSupport.stream(activeFiles.spliterator(), false)
                                                      .map(new Function<QueueFile<T>, Iterator<T>>() {
                                                        @Override
                                                        public Iterator<T> apply(QueueFile<T> ts) {

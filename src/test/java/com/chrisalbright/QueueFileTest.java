@@ -211,7 +211,21 @@ public class QueueFileTest {
     String second = q.fetch().get();
 
     assertThat(second, is("Hello Dolly"));
+  }
 
+  @Test
+  public void testSavesRecordsConsumed() throws IOException, InterruptedException {
+    q.push("Hello World");
+    q.push("Hello Dolly");
+    q.push("What's up doc?");
+
+    assertThat(q.getRecordCount(), is(3));
+
+    String first = q.fetch().get();
+
+    q.commit();
+
+    assertThat(q.getRecordCount(), is(2));
   }
 
   @Test
@@ -221,6 +235,7 @@ public class QueueFileTest {
     assertThat(h.getMagic(), is(QueueFile.Header.MAGIC_VALUE));
     assertThat(h.getReadPosition(), is(QueueFile.Header.STARTING_READ_POSITION));
     assertThat(h.getRecordCount(), is(0));
+    assertThat(h.getConsumedCount(), is(0));
     assertThat(h.isReadyForDelete(), is(false));
     assertThat(h.hasCapacity(), is(true));
 
@@ -237,6 +252,8 @@ public class QueueFileTest {
     h.setRecordCount(99);
     assertThat(h.getRecordCount(), is(99));
 
+    h.setConsumedCount(100);
+    assertThat(h.getConsumedCount(), is(100));
     h.incrementRecordCount();
     assertThat(h.getRecordCount(), is(100));
 
