@@ -88,7 +88,7 @@ public class QueueEnvironment<T> {
   }
 
   public int fileCount() {
-    return activeFiles.size();
+    return activeFiles.size() + consumedFiles.size();
   }
 
   public void commit() {
@@ -103,10 +103,8 @@ public class QueueEnvironment<T> {
     });
   }
 
-  private void cleanFile(final QueueFile<T> q) {
-    deleteExecutor.submit(() -> {
-      new File(rootPath, q.getFileName()).delete();
-    });
+  private boolean cleanFile(final QueueFile<T> q) {
+    return new File(rootPath, q.getFileName()).delete();
   }
 
   public void close() throws IOException{

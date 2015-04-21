@@ -8,6 +8,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.concurrent.BlockingQueue;
 
+import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.assertThat;
 
@@ -112,12 +113,14 @@ public class QueueEnvironmentTest {
       queue.add(message);
     }
 
+    assertThat(env.fileCount(), greaterThan(1));
+
     for (int i = 0; i < messageCount; i++) {
       queue.take();
     }
 
     env.commit();
 
-    assertThat(env.fileCount(), is(0));
+    assertThat(env.fileCount(), is(1));
   }
 }
