@@ -14,6 +14,7 @@ import java.nio.ByteBuffer;
 import java.security.SecureRandom;
 import java.util.Iterator;
 import java.util.Optional;
+import java.util.Random;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.zip.CRC32;
@@ -24,8 +25,54 @@ import static org.junit.Assert.*;
 
 public class SegmentTest {
 
+  static final class LongSegmentWriter implements Runnable {
+
+    final Segment<Long> segment;
+    final long messageStart;
+    final long messageEnd;
+
+    LongSegmentWriter(Segment<Long> segment, long messageStart, long messageEnd) {
+      this.segment = segment;
+      this.messageStart = messageStart;
+      this.messageEnd = messageEnd;
+    }
+
+
+    @Override
+    public void run() {
+      for (Long i = messageStart; i <= messageEnd; i++) {
+        try {
+//          System.err.println("Thread (" + Thread.currentThread().getId() + ") Message:" + i);
+          segment.push(i);
+        } catch (IOException ignored) {
+        }
+      }
+    }
+  }
+
+  static final class LongSegmentReader implements Runnable {
+
+    final Segment<Long> segment;
+    private long messageCount = 0;
+
+    LongSegmentReader(Segment<Long> segment) {
+      this.segment = segment;
+    }
+
+    @Override
+    public void run() {
+      try {
+        while (segment.fetch().isPresent()) {
+          messageCount++;
+        }
+      } catch (IOException | InterruptedException ignored) {
+      }
+    }
+  }
+
   File f;
   Segment<String> q;
+  Random r = new SecureRandom();
 
   @Rule
   public TemporaryFolder folder = new TemporaryFolder();
@@ -312,5 +359,66 @@ public class SegmentTest {
     assertThat(iterator.next(), is("five"));
     assertFalse(iterator.hasNext());
   }
+
+  @Test
+  public void testSegmentKnowsHowManyRecordsAreInIt() throws IOException {
+    File f = folder.newFile();
+    Segment<Long> segment = new Segment<>(f, Converters.LONG_ENCODER, Converters.LONG_DECODER);
+
+    segment.push(1L);
+    segment.push(2L);
+
+    assertThat("Segment should have 2 records", segment.getRecordCount(), is(2));
+  }
+
+  @Test(timeout = 20000)
+  public void testSegmentCanHandleWritesByMultipleThreads() throws IOException, InterruptedException {
+    File f = folder.newFile();
+    Segment<Long> segment = new Segment<>(f, Converters.LONG_ENCODER, Converters.LONG_DECODER, 1024 * 1024);
+    Long messagesPerThread = 100L;
+    final int numThreads = 100;
+    Thread[] threads = new Thread[numThreads];
+    for (int i = 0; i < numThreads; i++) {
+      threads[i] = new Thread(new LongSegmentWriter(segment, 1L + (i * messagesPerThread), messagesPerThread + (i * messagesPerThread)));
+      threads[i].start();
+    }
+    for (int i = 0; i < numThreads; i++) {
+      threads[i].join();
+    }
+
+    assertThat("Should have a total of " + (messagesPerThread * numThreads) + " messages", segment.getRecordCount(), is((int) (messagesPerThread * numThreads)));
+
+  }
+
+  @Test(timeout = 20000)
+  public void testSegmentCanHandleReadsByMultipleThreads() throws IOException, InterruptedException {
+    File f = folder.newFile();
+    final int numThreads = r.nextInt(50);
+    final long messageCount = r.nextInt(20000);
+    Thread[] threads = new Thread[numThreads];
+    LongSegmentReader[] readers = new LongSegmentReader[numThreads];
+    long recordsRead = 0;
+
+    Segment<Long> segment = new Segment<>(f, Converters.LONG_ENCODER, Converters.LONG_DECODER, 1024 * 1024);
+    LongSegmentWriter segmentWriter = new LongSegmentWriter(segment, 1, messageCount);
+    segmentWriter.run();
+
+
+    for (int i = 0; i < numThreads; i++) {
+      readers[i] = new LongSegmentReader(segment);
+      threads[i] = new Thread(readers[i]);
+      threads[i].start();
+    }
+    for (int i = 0; i < numThreads; i++) {
+      threads[i].join();
+    }
+    for (int i = 0; i < numThreads; i++) {
+      recordsRead += readers[i].messageCount;
+    }
+
+    assertThat("Should have read " + messageCount + " messages", recordsRead, is(messageCount));
+
+  }
+
 
 }

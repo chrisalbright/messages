@@ -158,6 +158,10 @@ public class Segment<T> implements AutoCloseable, Iterable<T> {
     return header.hasCapacity();
   }
 
+  public int recordCount() {
+    return header.getRecordCount();
+  }
+
   static class Header {
 
     final static String MAGIC_VALUE = "MSG-1";
