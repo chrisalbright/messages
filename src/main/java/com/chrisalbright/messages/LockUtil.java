@@ -1,4 +1,4 @@
-package com.chrisalbright;
+package com.chrisalbright.messages;
 
 import java.util.concurrent.locks.Lock;
 

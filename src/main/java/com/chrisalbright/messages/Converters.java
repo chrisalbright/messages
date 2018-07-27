@@ -1,4 +1,4 @@
-package com.chrisalbright;
+package com.chrisalbright.messages;
 
 import com.google.common.base.Charsets;
 import com.google.common.primitives.Longs;

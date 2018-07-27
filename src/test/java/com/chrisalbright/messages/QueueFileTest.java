@@ -1,5 +1,7 @@
-package com.chrisalbright;
+package com.chrisalbright.messages;
 
+import com.chrisalbright.messages.Converters;
+import com.chrisalbright.messages.QueueFile;
 import com.google.common.base.Stopwatch;
 import org.junit.Before;
 import org.junit.Rule;
