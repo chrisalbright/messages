@@ -1,7 +1,6 @@
-package com.chrisalbright.messages;
+package com.chrisalbright.messages.queue;
 
 import com.chrisalbright.messages.Converters;
-import com.chrisalbright.messages.QueueFile;
 import com.google.common.base.Stopwatch;
 import org.junit.Before;
 import org.junit.Rule;
@@ -23,10 +22,10 @@ import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.*;
 
-public class QueueFileTest {
+public class SegmentTest {
 
   File f;
-  QueueFile<String> q;
+  Segment<String> q;
 
   @Rule
   public TemporaryFolder folder = new TemporaryFolder();
@@ -34,15 +33,15 @@ public class QueueFileTest {
   @Before
   public void setup() throws IOException {
     f = folder.newFile("queue-file");
-    q = openStringQueueFile();
+    q = openStringSegmentFile();
   }
 
-  private QueueFile<String> openStringQueueFile() throws IOException {
-    return new QueueFile<>(f, Converters.STRING_ENCODER, Converters.STRING_DECODER);
+  private Segment<String> openStringSegmentFile() throws IOException {
+    return new Segment<>(f, Converters.STRING_ENCODER, Converters.STRING_DECODER);
   }
 
   @Test
-  public void testAddSingleItemToQueueFile() throws IOException, InterruptedException {
+  public void testAddSingleItemToSegment() throws IOException, InterruptedException {
     String expected = "hello world";
     q.push(expected);
 
@@ -54,7 +53,7 @@ public class QueueFileTest {
   }
 
   @Test
-  public void testAddMultipleItemsToQueueFile() throws IOException, InterruptedException {
+  public void testAddMultipleItemsToSegment() throws IOException, InterruptedException {
     String expected1 = "hello world";
     String expected2 = "hello dolly";
     String expected3 = "howdee doodie";
@@ -108,8 +107,8 @@ public class QueueFileTest {
   }
 
   @Test
-  public void testAddAnyTypeToQueueFile() throws IOException, InterruptedException {
-    QueueFile<Long> q = new QueueFile<>(folder.newFile(), Converters.LONG_ENCODER, Converters.LONG_DECODER);
+  public void testAddAnyTypeToSegment() throws IOException, InterruptedException {
+    Segment<Long> q = new Segment<>(folder.newFile(), Converters.LONG_ENCODER, Converters.LONG_DECODER);
 
     q.push(1l);
     q.push(2l);
@@ -131,7 +130,7 @@ public class QueueFileTest {
     int iterations = 10000;
     int messageSize = 1024;
     File f = folder.newFile();
-    QueueFile<byte[]> q = new QueueFile<>(f, Converters.BYTE_ARRAY_ENCODER, Converters.BYTE_ARRAY_DECODER, 1000 * 1024 * 1024);
+    Segment<byte[]> q = new Segment<>(f, Converters.BYTE_ARRAY_ENCODER, Converters.BYTE_ARRAY_DECODER, 1000 * 1024 * 1024);
     byte[][] data = new byte[messages][messageSize];
     Stopwatch w = Stopwatch.createStarted();
     for (int i = 0; i < messages; i++) {
@@ -158,12 +157,12 @@ public class QueueFileTest {
   }
 
   @Test
-  public void testDoesNotExceedMaxFilesize() throws IOException {
+  public void testDoesNotExceedMaxFileSize() throws IOException {
     int messages = 99;
     int messageSize = 1024;
 
     File f = folder.newFile();
-    QueueFile<byte[]> q = new QueueFile<>(f, Converters.BYTE_ARRAY_ENCODER, Converters.BYTE_ARRAY_DECODER, 100 * 1024);
+    Segment<byte[]> q = new Segment<>(f, Converters.BYTE_ARRAY_ENCODER, Converters.BYTE_ARRAY_DECODER, 100 * 1024);
 
     SecureRandom r = new SecureRandom();
     byte[] b = new byte[messageSize];
@@ -179,12 +178,12 @@ public class QueueFileTest {
   }
 
   @Test
-  public void testIndicatesWhenFull() throws IOException {
+  public void testSegmentIndicatesWhenFull() throws IOException {
     int messages = 100;
     int messageSize = 1024;
 
     File f = folder.newFile();
-    QueueFile<byte[]> q = new QueueFile<>(f, Converters.BYTE_ARRAY_ENCODER, Converters.BYTE_ARRAY_DECODER, 100 * 1024);
+    Segment<byte[]> q = new Segment<>(f, Converters.BYTE_ARRAY_ENCODER, Converters.BYTE_ARRAY_DECODER, 100 * 1024);
 
     SecureRandom r = new SecureRandom();
     byte[] b;
@@ -199,7 +198,7 @@ public class QueueFileTest {
   }
 
   @Test
-  public void testSavesReadPosition() throws IOException, InterruptedException {
+  public void testSegmentSavesReadPosition() throws IOException, InterruptedException {
     q.push("Hello World");
     q.push("Hello Dolly");
 
@@ -208,7 +207,7 @@ public class QueueFileTest {
     q.commit();
     q.close();
 
-    q = openStringQueueFile();
+    q = openStringSegmentFile();
 
     String second = q.fetch().get();
 
@@ -217,11 +216,11 @@ public class QueueFileTest {
   }
 
   @Test
-  public void testQueueFileHeaderDefaults() throws IOException {
+  public void testSegmentHeaderDefaults() throws IOException {
     RandomAccessFile file = new RandomAccessFile(folder.newFile("headerFile"), "rw");
-    QueueFile.Header h = new QueueFile.Header(file.getChannel());
-    assertThat(h.getMagic(), is(QueueFile.Header.MAGIC_VALUE));
-    assertThat(h.getReadPosition(), is(QueueFile.Header.STARTING_READ_POSITION));
+    Segment.Header h = new Segment.Header(file.getChannel());
+    assertThat(h.getMagic(), is(Segment.Header.MAGIC_VALUE));
+    assertThat(h.getReadPosition(), is(Segment.Header.STARTING_READ_POSITION));
     assertThat(h.getRecordCount(), is(0));
     assertThat(h.isReadyForDelete(), is(false));
     assertThat(h.hasCapacity(), is(true));
@@ -229,9 +228,9 @@ public class QueueFileTest {
   }
 
   @Test
-  public void testQueueFileHeader() throws IOException {
+  public void testSegmentHeader() throws IOException {
     RandomAccessFile file = new RandomAccessFile(folder.newFile("headerFile"), "rw");
-    QueueFile.Header h = new QueueFile.Header(file.getChannel());
+    Segment.Header h = new Segment.Header(file.getChannel());
 
     h.setReadPosition(75);
     assertThat(h.getReadPosition(), is(75));
@@ -253,7 +252,7 @@ public class QueueFileTest {
   }
 
   @Test
-  public void testAddToQueueIncrementsRecordCount() throws IOException {
+  public void testAddToSegmentIncrementsRecordCount() throws IOException {
 
     assertThat(q.getRecordCount(), is(0));
 
@@ -265,7 +264,7 @@ public class QueueFileTest {
   }
 
   @Test
-  public void testBlocksOnEmptyQueue() throws IOException, InterruptedException {
+  public void testBlocksOnEmptySegment() throws IOException, InterruptedException {
 
     Stopwatch timer = Stopwatch.createStarted();
     new Thread(() -> {
@@ -286,14 +285,14 @@ public class QueueFileTest {
   }
 
   @Test(expected = IllegalStateException.class)
-  public void testQueueFileHeaderWillNotOverwriteExistingFile() throws IOException {
+  public void testSegmentHeaderWillNotOverwriteExistingFile() throws IOException {
     RandomAccessFile file = new RandomAccessFile(folder.newFile("headerFile"), "rw");
     file.writeBytes("hello world");
-    new QueueFile.Header(file.getChannel());
+    new Segment.Header(file.getChannel());
   }
 
   @Test
-  public void testQueueIsIterable() throws IOException {
+  public void testSegmentIsIterable() throws IOException {
     q.push("one");
     q.push("two");
     q.push("three");

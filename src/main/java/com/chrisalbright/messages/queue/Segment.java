@@ -1,4 +1,4 @@
-package com.chrisalbright.messages;
+package com.chrisalbright.messages.queue;
 
 import com.google.common.base.Charsets;
 
@@ -13,7 +13,7 @@ import java.util.Optional;
 import java.util.concurrent.locks.*;
 import java.util.function.Function;
 
-public class QueueFile<T> implements AutoCloseable, Iterable<T> {
+public class Segment<T> implements AutoCloseable, Iterable<T> {
 
   private final RandomAccessFile raf;
   private final int maxFileSize;
@@ -29,11 +29,11 @@ public class QueueFile<T> implements AutoCloseable, Iterable<T> {
 
   private final Header header;
 
-  public QueueFile(File raf, Function<T, byte[]> encoder, Function<byte[], T> decoder) throws IOException {
+  public Segment(File raf, Function<T, byte[]> encoder, Function<byte[], T> decoder) throws IOException {
     this(raf, encoder, decoder, 100 * 1024);
   }
 
-  public QueueFile(File raf, Function<T, byte[]> encoder, Function<byte[], T> decoder, int maxFileSize) throws IOException {
+  public Segment(File raf, Function<T, byte[]> encoder, Function<byte[], T> decoder, int maxFileSize) throws IOException {
     this.raf = new RandomAccessFile(raf, "rw");
     this.encoderFn = encoder;
     this.decoderFn = decoder;
