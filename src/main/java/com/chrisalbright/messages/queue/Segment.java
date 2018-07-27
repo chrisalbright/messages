@@ -224,36 +224,17 @@ public class Segment<T> implements AutoCloseable, Iterable<T> {
 
     public void setReadPosition(int position) {
       Lock l = readPositionLock.writeLock();
-      try {
-        l.lock();
-        readPosition.put(position);
-        readPosition.flip();
-      } finally {
-        l.unlock();
-      }
+      writeInt(position, l, readPosition);
     }
 
     public int getReadPosition() {
       Lock l = readPositionLock.readLock();
-      try {
-        l.lock();
-        int position = readPosition.get();
-        readPosition.flip();
-        return position;
-      } finally {
-        l.unlock();
-      }
+      return readInt(l, readPosition);
     }
 
     public void setRecordCount(int count) {
       Lock l = recordCountLock.writeLock();
-      try {
-        l.lock();
-        recordCount.put(count);
-        recordCount.flip();
-      } finally {
-        l.unlock();
-      }
+      writeInt(count, l, recordCount);
     }
 
     public int incrementRecordCount() {
@@ -272,14 +253,7 @@ public class Segment<T> implements AutoCloseable, Iterable<T> {
 
     public int getRecordCount() {
       Lock l = recordCountLock.readLock();
-      try {
-        l.lock();
-        int count = recordCount.get();
-        recordCount.flip();
-        return count;
-      } finally {
-        l.unlock();
-      }
+      return readInt(l, recordCount);
     }
 
     private void writeBoolean(ByteBuffer buffer, Lock l, boolean value) {
@@ -298,6 +272,27 @@ public class Segment<T> implements AutoCloseable, Iterable<T> {
         byte b = buffer.get();
         buffer.flip();
         return b == 1;
+      } finally {
+        l.unlock();
+      }
+    }
+
+    private void writeInt(int i, Lock l, IntBuffer buffer) {
+      try {
+        l.lock();
+        buffer.put(i);
+        buffer.flip();
+      } finally {
+        l.unlock();
+      }
+    }
+
+    private int readInt(Lock l, IntBuffer buf) {
+      try {
+        l.lock();
+        int i = buf.get();
+        buf.flip();
+        return i;
       } finally {
         l.unlock();
       }
