@@ -170,7 +170,7 @@ public class SegmentTest {
     assertThat(actual3, is(3l));
   }
 
-  @Test(timeout = 2000)
+  @Test(timeout = 30000)
   public void testPerformance() throws IOException, InterruptedException {
     SecureRandom r = new SecureRandom();
     int messages = 30;
