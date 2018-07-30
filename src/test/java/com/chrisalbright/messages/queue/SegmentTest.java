@@ -9,7 +9,6 @@ import org.junit.rules.TemporaryFolder;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.security.SecureRandom;
 import java.util.Iterator;
@@ -23,95 +22,61 @@ import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.*;
 
-public class SegmentTest {
+public abstract class SegmentTest<T> {
 
-  static final class LongSegmentWriter implements Runnable {
+  File segmentFile;
+  private Segment<T> segment;
+  private Segment.Writer<T> segmentWriter;
+  private Segment.Reader<T> segmentReader;
+  private Random random = new SecureRandom();
 
-    final Segment<Long> segment;
-    final long messageStart;
-    final long messageEnd;
+  abstract Segment<T> openNewSegment(File segmentPath);
 
-    LongSegmentWriter(Segment<Long> segment, long messageStart, long messageEnd) {
-      this.segment = segment;
-      this.messageStart = messageStart;
-      this.messageEnd = messageEnd;
-    }
-
-
-    @Override
-    public void run() {
-      for (Long i = messageStart; i <= messageEnd; i++) {
-        try {
-//          System.err.println("Thread (" + Thread.currentThread().getId() + ") Message:" + i);
-          segment.push(i);
-        } catch (IOException ignored) {
-        }
-      }
-    }
-  }
-
-  static final class LongSegmentReader implements Runnable {
-
-    final Segment<Long> segment;
-    private long messageCount = 0;
-
-    LongSegmentReader(Segment<Long> segment) {
-      this.segment = segment;
-    }
-
-    @Override
-    public void run() {
-      try {
-        while (segment.fetch().isPresent()) {
-          messageCount++;
-        }
-      } catch (IOException | InterruptedException ignored) {
-      }
-    }
-  }
-
-  File f;
-  Segment<String> q;
-  Random r = new SecureRandom();
+  abstract T newExampleElement();
 
   @Rule
   public TemporaryFolder folder = new TemporaryFolder();
 
   @Before
   public void setup() throws IOException {
-    f = folder.newFile("queue-file");
-    q = openStringSegmentFile();
+    segmentFile = folder.newFolder("segment-folder");
+    segment = openNewSegment(segmentFile);
+    segmentWriter = segment.getWriter();
+    segmentReader = segment.newReader();
   }
 
-  private Segment<String> openStringSegmentFile() throws IOException {
-    return new Segment<>(f, Converters.STRING_ENCODER, Converters.STRING_DECODER);
+  @Test(expected = IllegalArgumentException.class)
+  public void testSegmentExpectsADirectory() throws IOException {
+    File file = folder.newFile();
+    openNewSegment(file);
   }
 
   @Test
   public void testAddSingleItemToSegment() throws IOException, InterruptedException {
-    String expected = "hello world";
-    q.push(expected);
+    T expected = newExampleElement();
+    segmentWriter.push(expected);
 
-    Optional<String> optional = q.fetch();
+    Optional<T> optional = segmentReader.fetch();
     assertTrue(optional.isPresent());
 
-    String actual = optional.get();
+    T actual = optional.get();
     assertThat(actual, is(expected));
   }
 
+
   @Test
   public void testAddMultipleItemsToSegment() throws IOException, InterruptedException {
-    String expected1 = "hello world";
-    String expected2 = "hello dolly";
-    String expected3 = "howdee doodie";
+    T expected1 = newExampleElement();
+    T expected2 = newExampleElement();
+    T expected3 = newExampleElement();
 
-    q.push(expected1);
-    q.push(expected2);
-    q.push(expected3);
+    segmentWriter.push(expected1);
+    segmentWriter.push(expected2);
+    segmentWriter.push(expected3);
 
-    String actual1 = q.fetch().get();
-    String actual2 = q.fetch().get();
-    String actual3 = q.fetch().get();
+    T actual1 = segmentReader.fetch().get();
+    T actual2 = segmentReader.fetch().get();
+    T actual3 = segmentReader.fetch().get();
 
     assertThat(actual1, is(expected1));
     assertThat(actual2, is(expected2));
@@ -153,259 +118,185 @@ public class SegmentTest {
     assertEquals(Long.valueOf(-1l), crc3);
   }
 
-  @Test
-  public void testAddAnyTypeToSegment() throws IOException, InterruptedException {
-    Segment<Long> q = new Segment<>(folder.newFile(), Converters.LONG_ENCODER, Converters.LONG_DECODER);
-
-    q.push(1l);
-    q.push(2l);
-    q.push(3l);
-
-    Long actual1 = q.fetch().get();
-    Long actual2 = q.fetch().get();
-    Long actual3 = q.fetch().get();
-
-    assertThat(actual1, is(1l));
-    assertThat(actual2, is(2l));
-    assertThat(actual3, is(3l));
-  }
-
   @Test(timeout = 30000)
   public void testPerformance() throws IOException, InterruptedException {
-    SecureRandom r = new SecureRandom();
-    int messages = 30;
     int iterations = 10000;
-    int messageSize = 1024;
-    File f = folder.newFile();
-    Segment<byte[]> q = new Segment<>(f, Converters.BYTE_ARRAY_ENCODER, Converters.BYTE_ARRAY_DECODER, 1000 * 1024 * 1024);
-    byte[][] data = new byte[messages][messageSize];
     Stopwatch w = Stopwatch.createStarted();
-    for (int i = 0; i < messages; i++) {
-      r.nextBytes(data[i]);
-    }
-    w.stop();
-    System.out.println("Generated " + messages + " random messages in " + w.elapsed(TimeUnit.MILLISECONDS) + " milliseconds.");
-
-    w = Stopwatch.createStarted();
     for (int i = 0; i < iterations; i++) {
-      q.push(data[i % messages]);
+      segmentWriter.push(newExampleElement());
     }
     w.stop();
     System.out.println("Wrote " + iterations + " messages in " + w.elapsed(TimeUnit.MILLISECONDS) + " milliseconds.");
 
-    Optional<byte[]> val = Optional.empty();
-    byte[] bytes = new byte[messageSize];
     w = Stopwatch.createStarted();
-    while ((val = q.fetch()) != Optional.<byte[]>empty()) {
-      bytes = val.get();
+    while (segmentReader.fetch().isPresent()) {
+      // NOOP
     }
     w.stop();
     System.out.println("Read " + iterations + " messages in " + w.elapsed(TimeUnit.MILLISECONDS) + " milliseconds.");
   }
 
-  @Test
-  public void testDoesNotExceedMaxFileSize() throws IOException {
-    int messages = 99;
-    int messageSize = 1024;
+//  @Test
+//  public void testDoesNotExceedMaxFileSize() throws IOException {
+//    int messages = 99;
+//    int messageSize = 1024;
+//
+//    byte[] b = new byte[messageSize];
+//
+//    for (int i = 0; i < messages; i++) {
+//      b = new byte[messageSize];
+//      random.nextBytes(b);
+//      assertTrue(segment.push(b));
+//    }
+//
+//    random.nextBytes(b);
+//    assertFalse(segment.push(b));
+//  }
 
-    File f = folder.newFile();
-    Segment<byte[]> q = new Segment<>(f, Converters.BYTE_ARRAY_ENCODER, Converters.BYTE_ARRAY_DECODER, 100 * 1024);
+//  @Test
+//  public void testSegmentIndicatesWhenFull() throws IOException {
+//    int messages = 100;
+//    int messageSize = 1024;
+//
+//    MappedSegment<byte[]> segment = new MappedSegment<>(1, segmentFile, Converters.BYTE_ARRAY_ENCODER, Converters.BYTE_ARRAY_DECODER, 100 * 1024);
+//
+//    SecureRandom random = new SecureRandom();
+//    byte[] b;
+//
+//    assertTrue(segment.hasCapacity());
+//    for (int i = 0; i < messages; i++) {
+//      b = new byte[messageSize];
+//      random.nextBytes(b);
+//      segment.push(b);
+//    }
+//    assertFalse(segment.hasCapacity());
+//  }
 
-    SecureRandom r = new SecureRandom();
-    byte[] b = new byte[messageSize];
+//  @Test
+//  public void testSegmentSavesReadPosition() throws IOException, InterruptedException {
+//    segment.push("Hello World");
+//    segment.push("Hello Dolly");
+//
+//    String first = segment.fetch().get();
+//
+//    segment.commit();
+//    segment.close();
+//
+//    segment = openStringSegmentFile();
+//
+//    String second = segment.fetch().get();
+//
+//    assertThat(second, is("Hello Dolly"));
+//
+//  }
 
-    for (int i = 0; i < messages; i++) {
-      b = new byte[messageSize];
-      r.nextBytes(b);
-      assertTrue(q.push(b));
-    }
-
-    r.nextBytes(b);
-    assertFalse(q.push(b));
-  }
-
-  @Test
-  public void testSegmentIndicatesWhenFull() throws IOException {
-    int messages = 100;
-    int messageSize = 1024;
-
-    File f = folder.newFile();
-    Segment<byte[]> q = new Segment<>(f, Converters.BYTE_ARRAY_ENCODER, Converters.BYTE_ARRAY_DECODER, 100 * 1024);
-
-    SecureRandom r = new SecureRandom();
-    byte[] b;
-
-    assertTrue(q.hasCapacity());
-    for (int i = 0; i < messages; i++) {
-      b = new byte[messageSize];
-      r.nextBytes(b);
-      q.push(b);
-    }
-    assertFalse(q.hasCapacity());
-  }
-
-  @Test
-  public void testSegmentSavesReadPosition() throws IOException, InterruptedException {
-    q.push("Hello World");
-    q.push("Hello Dolly");
-
-    String first = q.fetch().get();
-
-    q.commit();
-    q.close();
-
-    q = openStringSegmentFile();
-
-    String second = q.fetch().get();
-
-    assertThat(second, is("Hello Dolly"));
-
-  }
-
-  @Test
-  public void testSegmentHeaderDefaults() throws IOException {
-    RandomAccessFile file = new RandomAccessFile(folder.newFile("headerFile"), "rw");
-    Segment.Header h = new Segment.Header(file.getChannel());
-    assertThat(h.getMagic(), is(Segment.Header.MAGIC_VALUE));
-    assertThat(h.getReadPosition(), is(Segment.Header.STARTING_READ_POSITION));
-    assertThat(h.getRecordCount(), is(0));
-    assertThat(h.isReadyForDelete(), is(false));
-    assertThat(h.hasCapacity(), is(true));
-
-  }
-
-  @Test
-  public void testSegmentHeader() throws IOException {
-    RandomAccessFile file = new RandomAccessFile(folder.newFile("headerFile"), "rw");
-    Segment.Header h = new Segment.Header(file.getChannel());
-
-    h.setReadPosition(75);
-    assertThat(h.getReadPosition(), is(75));
-
-    h.setRecordCount(99);
-    assertThat(h.getRecordCount(), is(99));
-
-    h.incrementRecordCount();
-    assertThat(h.getRecordCount(), is(100));
-
-    h.markReadyForDelete();
-    assertThat(h.isReadyForDelete(), is(true));
-
-    h.markNotReadyForDelete();
-    assertThat(h.isReadyForDelete(), is(false));
-
-    h.setNoCapacity();
-    assertThat(h.hasCapacity(), is(false));
-  }
 
   @Test
   public void testAddToSegmentIncrementsRecordCount() throws IOException {
 
-    assertThat(q.getRecordCount(), is(0));
+    assertThat(segment.getMetaData().getRecordCount(), is(0));
 
-    q.push("hello");
-    q.push("world");
+    segment.getWriter().push(newExampleElement());
+    segment.getWriter().push(newExampleElement());
 
-    int recordCount = q.getRecordCount();
-    assertThat(q.getRecordCount(), is(2));
+    int recordCount = segment.getMetaData().getRecordCount();
+    assertThat(recordCount, is(2));
   }
 
-  @Test
+  @Test(timeout = 2000)
   public void testBlocksOnEmptySegment() throws IOException, InterruptedException {
 
     Stopwatch timer = Stopwatch.createStarted();
     new Thread(() -> {
       try {
         TimeUnit.MILLISECONDS.sleep(300);
-        q.push("Hello world");
-      } catch (InterruptedException e) {
-        throw new RuntimeException(e);
-      } catch (IOException e) {
+        segmentWriter.push(newExampleElement());
+      } catch (InterruptedException | IOException e) {
         throw new RuntimeException(e);
       }
     }).start();
 
-    q.fetch();
+    segmentReader.fetch();
     timer.stop();
 
     assertThat(timer.elapsed(TimeUnit.MILLISECONDS), greaterThanOrEqualTo(300L));
   }
 
-  @Test(expected = IllegalStateException.class)
-  public void testSegmentHeaderWillNotOverwriteExistingFile() throws IOException {
-    RandomAccessFile file = new RandomAccessFile(folder.newFile("headerFile"), "rw");
-    file.writeBytes("hello world");
-    new Segment.Header(file.getChannel());
-  }
+//  @Test(expected = IllegalStateException.class)
+//  public void testSegmentHeaderWillNotOverwriteExistingFile() throws IOException {
+//    RandomAccessFile file = new RandomAccessFile(folder.newFile("headerFile"), "rw");
+//    file.writeBytes("hello world");
+//    new MappedSegment.Header(file.getChannel());
+//  }
 
   @Test
-  public void testSegmentIsIterable() throws IOException {
-    q.push("one");
-    q.push("two");
-    q.push("three");
-    q.push("four");
-    q.push("five");
+  public void testSegmentReaderIsIterable() throws IOException {
+    final T one = newExampleElement();
+    final T two = newExampleElement();
+    final T three = newExampleElement();
+    final T four = newExampleElement();
+    final T five = newExampleElement();
+    segmentWriter.push(one);
+    segmentWriter.push(two);
+    segmentWriter.push(three);
+    segmentWriter.push(four);
+    segmentWriter.push(five);
 
-    Iterator<String> iterator = q.iterator();
+    Iterator<T> iterator = segmentReader.iterator();
     assertTrue(iterator.hasNext());
-    assertThat(iterator.next(), is("one"));
+    assertThat(iterator.next(), is(one));
     assertTrue(iterator.hasNext());
-    assertThat(iterator.next(), is("two"));
+    assertThat(iterator.next(), is(two));
     assertTrue(iterator.hasNext());
-    assertThat(iterator.next(), is("three"));
+    assertThat(iterator.next(), is(three));
     assertTrue(iterator.hasNext());
-    assertThat(iterator.next(), is("four"));
+    assertThat(iterator.next(), is(four));
     assertTrue(iterator.hasNext());
-    assertThat(iterator.next(), is("five"));
+    assertThat(iterator.next(), is(five));
     assertFalse(iterator.hasNext());
   }
 
   @Test
   public void testSegmentKnowsHowManyRecordsAreInIt() throws IOException {
-    File f = folder.newFile();
-    Segment<Long> segment = new Segment<>(f, Converters.LONG_ENCODER, Converters.LONG_DECODER);
+    segment.getWriter().push(newExampleElement());
+    segment.getWriter().push(newExampleElement());
 
-    segment.push(1L);
-    segment.push(2L);
-
-    assertThat("Segment should have 2 records", segment.getRecordCount(), is(2));
+    assertThat("Segment should have 2 records", segment.getMetaData().getRecordCount(), is(2));
   }
 
   @Test(timeout = 20000)
-  public void testSegmentCanHandleWritesByMultipleThreads() throws IOException, InterruptedException {
-    File f = folder.newFile();
-    Segment<Long> segment = new Segment<>(f, Converters.LONG_ENCODER, Converters.LONG_DECODER, 1024 * 1024);
+  public void testSegmentWriterCanHandleWritesByMultipleThreads() throws InterruptedException, IOException {
     Long messagesPerThread = 100L;
     final int numThreads = 100;
     Thread[] threads = new Thread[numThreads];
     for (int i = 0; i < numThreads; i++) {
-      threads[i] = new Thread(new LongSegmentWriter(segment, 1L + (i * messagesPerThread), messagesPerThread + (i * messagesPerThread)));
+      threads[i] = new Thread(new TestSegmentWriter<>(segmentWriter, this::newExampleElement, 1L + (i * messagesPerThread), messagesPerThread + (i * messagesPerThread)));
       threads[i].start();
     }
     for (int i = 0; i < numThreads; i++) {
       threads[i].join();
     }
 
-    assertThat("Should have a total of " + (messagesPerThread * numThreads) + " messages", segment.getRecordCount(), is((int) (messagesPerThread * numThreads)));
+    assertThat("Should have a total of " + (messagesPerThread * numThreads) + " messages", segment.getMetaData().getRecordCount(), is((int) (messagesPerThread * numThreads)));
 
   }
 
   @Test(timeout = 20000)
-  public void testSegmentCanHandleReadsByMultipleThreads() throws IOException, InterruptedException {
-    File f = folder.newFile();
-    final int numThreads = r.nextInt(50);
-    final long messageCount = r.nextInt(20000);
+  public void testSegmentReaderCanHandleReadsByMultipleThreads() throws IOException, InterruptedException {
+    final int numThreads = random.nextInt(50);
+    final long messageCount = random.nextInt(10000);
     Thread[] threads = new Thread[numThreads];
-    LongSegmentReader[] readers = new LongSegmentReader[numThreads];
+    TestSegmentReader[] readers = new TestSegmentReader[numThreads];
     long recordsRead = 0;
 
-    Segment<Long> segment = new Segment<>(f, Converters.LONG_ENCODER, Converters.LONG_DECODER, 1024 * 1024);
-    LongSegmentWriter segmentWriter = new LongSegmentWriter(segment, 1, messageCount);
+    Segment<T> segment = openNewSegment(folder.newFolder("multi-thread-read"));
+    Segment.Writer<T> writer = segment.getWriter();
+    TestSegmentWriter<T> segmentWriter = new TestSegmentWriter<>(writer, this::newExampleElement, 1, messageCount);
     segmentWriter.run();
 
 
     for (int i = 0; i < numThreads; i++) {
-      readers[i] = new LongSegmentReader(segment);
+      readers[i] = new TestSegmentReader<>(segment);
       threads[i] = new Thread(readers[i]);
       threads[i].start();
     }
@@ -416,9 +307,8 @@ public class SegmentTest {
       recordsRead += readers[i].messageCount;
     }
 
-    assertThat("Should have read " + messageCount + " messages", recordsRead, is(messageCount));
+    assertThat("Should have read " + messageCount + " messages from " + numThreads + " threads", recordsRead, is(messageCount * numThreads));
 
   }
-
 
 }
