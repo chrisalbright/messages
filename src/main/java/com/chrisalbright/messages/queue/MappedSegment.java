@@ -7,9 +7,11 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
-import java.nio.IntBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -29,38 +31,38 @@ public class MappedSegment<T> implements Segment<T> {
   private Lock fetchLock = new ReentrantLock();
   private Condition fetchCondition = fetchLock.newCondition();
 
-  private final Header header;
-  private File path;
-  private long id;
+  private Path path;
 
-  public MappedSegment(long id, File path, Function<T, byte[]> encoder, Function<byte[], T> decoder) throws IOException {
-    this(id, path, encoder, decoder, 100 * 1024);
+  public MappedSegment(File path, Function<T, byte[]> encoder, Function<byte[], T> decoder) throws IOException {
+    this(path, encoder, decoder, 100 * 1024 * 1024);
   }
 
-  public MappedSegment(long id, File path, Function<T, byte[]> encoder, Function<byte[], T> decoder, int maxFileSize) throws IOException {
+  public MappedSegment(File path, Function<T, byte[]> encoder, Function<byte[], T> decoder, int maxFileSize) throws IOException {
     Preconditions.checkArgument(path.isDirectory(), "%s must be a directory", path);
     if (!path.mkdirs()) {
       final boolean pathExistsOrWasCreated = path.exists();
       Preconditions.checkArgument(pathExistsOrWasCreated, "Unable to create %s", path);
     }
 
-    this.id = id;
-    this.path = path;
-    this.raf = openSegmentFile(this.path, this.id);
+    this.path = path.toPath();
+    this.raf = openSegmentFile(path);
     this.encoderFn = encoder;
     this.decoderFn = decoder;
     this.maxFileSize = maxFileSize;
     this.metaData = new MetaData(new File(path.getCanonicalPath().concat(".meta")).toPath());
-    this.header = new Header(metaData);
     this.channel = raf.getChannel();
   }
 
-  private RandomAccessFile openSegmentFile(File path, long id) throws FileNotFoundException {
-    return new RandomAccessFile(fileFor(path, FileType.segment, this.id), "rwd");
+  private RandomAccessFile openSegmentFile(File path) throws FileNotFoundException {
+    return new RandomAccessFile(fileFor(path, FileType.segment), "rwd");
   }
 
-  private File fileFor(File path, FileType fileType, long id) {
-    return new File(path, String.format("%020d.%s", this.id, fileType));
+  private File fileFor(File path, FileType fileType) {
+    return new File(path, String.format("segment.%s", fileType));
+  }
+
+  private Path fileFor(Path path, FileType fileType) {
+    return path.resolve(String.format("segment.%s", fileType));
   }
 
   @Override
@@ -70,12 +72,21 @@ public class MappedSegment<T> implements Segment<T> {
   }
 
   private void signalNotEmpty() {
-    try {
-      fetchLock.lock();
-      fetchCondition.signal();
-    } finally {
-      fetchLock.unlock();
-    }
+    boolean signalSent;
+    do {
+      try {
+        while (!fetchLock.tryLock(100, TimeUnit.MILLISECONDS)) {
+        }
+        try {
+          fetchCondition.signal();
+          signalSent = true;
+        } finally {
+          fetchLock.unlock();
+        }
+      } catch (InterruptedException e) {
+        signalSent = false;
+      }
+    } while (!signalSent);
   }
 
   @Override
@@ -84,7 +95,7 @@ public class MappedSegment<T> implements Segment<T> {
     try {
       return new Reader<T>() {
         int readPosition = 0;
-        FileChannel channel = openSegmentFile(path, id).getChannel();
+        FileChannel channel = FileChannel.open(fileFor(path, FileType.segment), StandardOpenOption.READ);
 
         @Override
         public Optional<T> fetch() throws IOException, InterruptedException {
@@ -94,8 +105,8 @@ public class MappedSegment<T> implements Segment<T> {
             long length = 0;
             length = channel.size() - readPosition;
 
-            while (header.getRecordCount() == 0) {
-              fetchCondition.await();
+            while (metaData.getRecordCount() == 0) {
+              fetchCondition.await(100, TimeUnit.MILLISECONDS);
             }
 
             ByteBuffer buffer;
@@ -137,7 +148,7 @@ public class MappedSegment<T> implements Segment<T> {
         buffer = channel.map(FileChannel.MapMode.READ_WRITE, channelSize, dataSize);
         buffer.putInt(bytes.length);
         buffer.put(bytes);
-        int count = header.incrementRecordCount();
+        int count = metaData.incrementRecordCount();
         if (count == 0) {
           signalNotEmpty();
         }
@@ -151,66 +162,6 @@ public class MappedSegment<T> implements Segment<T> {
   @Override
   public MetaData getMetaData() {
     return metaData;
-  }
-
-  static class Header {
-
-    private final MetaData metaData;
-
-    Header(MetaData metaData) {
-      this.metaData = metaData;
-    }
-
-    public int incrementRecordCount() {
-      return metaData.incrementRecordCount();
-    }
-
-    public int getRecordCount() throws IOException {
-      return metaData.getRecordCount();
-    }
-
-    private static void writeBoolean(ByteBuffer buffer, Lock l, boolean value) {
-      try {
-        l.lock();
-        buffer.put((byte) (value ? 1 : 0));
-        buffer.flip();
-      } finally {
-        l.unlock();
-      }
-    }
-
-    private boolean readBoolean(ByteBuffer buffer, Lock l) {
-      try {
-        l.lock();
-        byte b = buffer.get();
-        buffer.flip();
-        return b == 1;
-      } finally {
-        l.unlock();
-      }
-    }
-
-    private void writeInt(int i, Lock l, IntBuffer buffer) {
-      try {
-        l.lock();
-        buffer.put(i);
-        buffer.flip();
-      } finally {
-        l.unlock();
-      }
-    }
-
-    private int readInt(Lock l, IntBuffer buf) {
-      try {
-        l.lock();
-        int i = buf.get();
-        buf.flip();
-        return i;
-      } finally {
-        l.unlock();
-      }
-    }
-
   }
 
 }
