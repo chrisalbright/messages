@@ -115,8 +115,8 @@ public class MappedSegment<T> implements Segment<T> {
       return new Reader<T>() {
         int dataReadPosition = 0;
         int recordSizeReadPosition = 0;
-        FileChannel dataChannel = FileChannel.open(dataPath, READ, WRITE);
-        FileChannel recordSizeChannel = FileChannel.open(recordSizePath, READ, WRITE);
+        FileChannel dataChannel = FileChannel.open(dataPath, READ);
+        FileChannel recordSizeChannel = FileChannel.open(recordSizePath, READ);
 
         @Override
         public Optional<T> fetch() throws IOException, InterruptedException {
@@ -126,6 +126,11 @@ public class MappedSegment<T> implements Segment<T> {
             while (metaData.getRecordCount() == 0) {
               fetchCondition.await(100, TimeUnit.MILLISECONDS);
             }
+
+            if ((recordSizeReadPosition + Integer.BYTES) > recordSizeChannel.size()) {
+              return Optional.empty();
+            }
+
             ByteBuffer recordSizeBuffer = recordSizeChannel.map(FileChannel.MapMode.READ_ONLY, recordSizeReadPosition, Integer.BYTES);
             int dataLength = recordSizeBuffer.getInt();
             ByteBuffer dataBuffer = dataChannel.map(FileChannel.MapMode.READ_ONLY, dataReadPosition, dataLength);
