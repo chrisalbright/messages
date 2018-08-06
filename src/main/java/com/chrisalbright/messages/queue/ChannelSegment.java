@@ -34,8 +34,8 @@ public class ChannelSegment<T> implements Segment<T> {
   private final FileChannel recordSizeChannel;
   private final MetaData metaData;
 
-  private Lock fetchLock = new ReentrantLock();
-  private Condition fetchCondition = fetchLock.newCondition();
+  private final Lock fetchLock = new ReentrantLock();
+  private final Condition fetchCondition = fetchLock.newCondition();
 
 
   public ChannelSegment(Path segmentPath, Function<T, byte[]> encoder, Function<byte[], T> decoder, int maxSegmentSize) {
